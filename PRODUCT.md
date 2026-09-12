@@ -49,8 +49,10 @@ flowchart TD
 
 ### 2.2. The 90-Minute Momentum Rule (Cold-Start Breaker)
 To resolve the morning cold-start dilemma and create immediate forward momentum:
-- **Condition:** Completing the day's first continuous, uninterrupted **90-minute focus block** (1.5 hours of work).
+- **Condition:** Completing the day's first continuous, uninterrupted **90-minute focus block** (1.5 hours of work) completed prior to **12:00 PM Noon** (strictly incentivizing early wake-up). Sessions commencing or finishing after 12:00 PM mint at the standard 1.0x velocity ($1.5\text{ credits}$).
+- **Interruption Grace Tolerance:** A 5-minute (300-second) grace window permits brief system sleeps, app restarts, or essential interruptions. Any pause exceeding 5 minutes breaks session continuity and resets the block to minute 0.
 - **Reward:** Applies a multiplicative **2.0x multiplier** (double rate) to the session's earnings: 1.5 base credits × 2.0 = **3.0 credits** earned.
+- **Work Debt Priority:** If a carried-over deficit debt ($-1.0\text{ credit}$) or emergency debt ($-2.0\text{ credits}$) exists, morning earnings multiply first to $3.0\text{ credits}$, after which the debt is subtracted at the end of the block, releasing the remaining net credits to the wallet.
 - **Impact:** Immediately accelerates early-day momentum, securing 3.0 credits which fully satisfies the daily bed amenity or multiple midday rest cycles right from the morning block.
 
 ### 2.3. Triple-Gate Offline Meeting Verification (Gemini AI Audit)
@@ -64,10 +66,11 @@ For professional commitments occurring off-screen (in-person client meetings, ph
      2. **Physical / Digital Documentation:** Formal receipt, invoice, payment slip, or calendar invite.
      3. **Contextual Photo:** Physical timestamped photo of the meeting environment or participants.
 3. **Gate 3 (Multimodal Gemini AI Audit Engine):**
-   - The bundle is dispatched to a multimodal **Gemini API model** for strict verification.
-   - The model inspects the photo and document imagery against the agenda notes and duration for contextual authenticity and timestamps.
+   - The bundle is dispatched to a multimodal **Gemini API model** (key stored in macOS Keychain) for strict verification.
+   - The model inspects the photo and document imagery against the agenda notes and duration for contextual authenticity, visible timestamps, and environmental plausibility.
+   - Raw image files are auto-purged after 30 days while cryptographically retaining transaction hashes in SQLite permanently.
    - **Resolution:** Instant approval releases credits into the daily wallet; strict rejection provides constructive denial rationale.
-   - **Appeal Protocol:** To prevent frivolous circumvention, the user can only file an official appeal after **three consecutive rejections** on the same session, logging the appeal to the permanent dashboard audit trail.
+   - **Deep-Reasoning Appeal Escalation:** To eliminate cheating, the user can file an official appeal only after **three consecutive rejections** on the same session. The appeal routes the evidence and user justification through a secondary **Gemini Pro deep-reasoning arbitration pass**. If Gemini Pro affirms, credits are released; if rejected, the session is permanently locked against further claims.
 
 ### 2.4. Customizable Micro-Habits & Daily Discipline Tasks
 To incentivize essential personal hygiene, wellness, and baseline discipline routines:
@@ -96,22 +99,23 @@ To prevent systemic burnout and support sustainable high performance:
 
 Distractions are disabled on macOS and paired iOS devices by default.
 
-### 3.1. Desktop Process Lockdown (macOS)
+### 3.1. Desktop Process Lockdown (Privileged Helper Daemon)
 - **Target Applications:** Steam, Discord, Battle.net, Epic Games Launcher, Riot Client, and standalone gaming executables.
-- **Mechanism:** Background enforcement daemon continuously monitors running processes, immediately suspending or terminating unauthorized target instances unless an active purchase token is active.
+- **Daemon Architecture:** Installed as a root-level Privileged Helper Daemon (`/Library/LaunchDaemons`) via macOS `SMJobBless` / ServiceManagement.
+- **Tamper Defense & Aggressive Keep-Alive:** Configured with `KeepAlive: true`. If forcefully killed via Activity Monitor or Terminal, `launchd` respawns it within 500ms. If an ungraceful crash is detected, it automatically defaults to an immediate fail-closed state, engaging `pf` packet filtering and terminating unauthorized target processes until the core state verifies.
 
 ### 3.2. Web Domain & Network Lockdown
 - **Target Domains:** `youtube.com`, `reddit.com`, `facebook.com`, `instagram.com`, `x.com` (Twitter), `tiktok.com`, `twitch.tv`, `netflix.com`.
 - **Food Delivery Portals:** `talabat.com`, `ubereats.com`, `elmenus.com`, and related online food ordering websites.
-- **Mechanism:** System-level host/packet routing or browser shield across macOS (Mac Mini) and mobile. Blocked destinations render a clean Zoid Lock In "Access Locked: Spend Credits to Unlock" gateway.
+- **Mechanism:** System-level host/packet routing (`pf` Packet Filter) and local DNS interception across macOS (Mac Mini) and mobile. Blocked destinations render a clean Zoid Lock In "Access Locked: Spend Credits to Unlock" gateway.
 
-### 3.3. Cross-Device Closure (Apple Shortcuts & Focus Mode)
+### 3.3. Cross-Device Closure (Apple Shortcuts & iOS Focus Filter Window)
 - **Problem:** Desktop process locks cause subconscious redirection to mobile screens and mobile food ordering apps.
-- **Solution:** Bi-directional Apple Shortcuts and native macOS/iOS Focus Filter automation.
+- **Sync Protocol:** Bi-directional encrypted state sync via **iCloud Drive (`state.json`)** backed by a **Cloudflare Worker push webhook relay** for remote reliability off local Wi-Fi.
 - **Action:**
   - Initiating focus sessions triggers **Work Mode** across macOS and iOS via iCloud sync.
   - Silences all notifications and locks mobile entertainment, social, and food ordering applications (Talabat, Uber Eats, etc.).
-  - Purchasing passes (e.g., Food Pass or Phone Pass) temporarily disengages the corresponding mobile shield for the exact purchased window.
+  - Purchasing passes (e.g., Food Pass or Phone Pass) pushes a state change that triggers an automated **iOS Shortcut Focus Filter Window**, temporarily unblocking apps for the exact purchased duration and automatically re-engaging the shield when the timer expires.
 
 ---
 
@@ -184,9 +188,10 @@ sequenceDiagram
 
 ## 7. Emergency Safety Valve & Next-Day Debt
 
-### 7.1. Zero-Friction Emergency Override
+### 7.1. Zero-Friction Emergency Override (5-Second Hold)
 - For genuine crises (medical urgencies, family emergencies, urgent financial matters), an **Emergency Override** button is always accessible without passwords or 2FA.
-- Immediately disables all blocks for **30 minutes**.
+- **Physical Interaction:** Requires **pressing and holding the button for 5 continuous seconds**, followed by a confirmation prompt: *"Confirm Emergency Access: This unlocks all distractions for 30 minutes, dispatches an incident audit alert, and levies a mandatory 2-hour focus debt tomorrow."*
+- **Execution:** Immediately disables all blocks for exactly **30 minutes**.
 
 ### 7.2. Accountability Recoil (The 2-Hour Work Debt)
 - Triggering the emergency valve immediately dispatches an incident audit email.
