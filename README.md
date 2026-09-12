@@ -11,7 +11,7 @@ Zoid Lock In eliminates procrastination through artificial scarcity, daily midni
 - **Dual-Gate Offline Meeting Verification:** Real-time punch-in/out timers plus mandatory supporting evidence (agenda, receipt, photo).
 - **Hard Digital Lockdown:** Blocks Steam, Discord, game launchers, YouTube, Reddit, and social media domains by default.
 - **Cross-Device Shield:** Integrated with Apple Shortcuts and Focus Modes to silence mobile distractions.
-- **Anti-Cheating Admin Gateway:** 12+ character password, Google Authenticator (TOTP) 2FA, and automated warning email dispatch.
+- **Anti-Cheating Admin Gateway:** 12+ character password, Google Authenticator (TOTP) 2FA, automated warning email dispatch, and a 48-hour cooldown lockout on configuration changes.
 - **Curfew & Vault:** 10:00 PM evening lockout for entertainment purchases. Unspent midnight credits convert into a permanent Lifetime Surplus Vault stat and advance the Daily Victory Streak.
 - **Emergency Safety Valve:** Friction-free 30-minute bypass for true emergencies backed by an audit trail and a 2-hour next-day work debt.
 

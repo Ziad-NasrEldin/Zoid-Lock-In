@@ -155,6 +155,10 @@ sequenceDiagram
 2. **Two-Factor Authentication (2FA):** Standard TOTP algorithm verified via **Google Authenticator**.
 3. **Psychological Warning Dispatch:** An automated email is instantly sent to the user's personal inbox:
    > *"CRITICAL SECURITY & INTEGRITY ALERT: You have authenticated into the Zoid 0 Trading Center Admin Settings. Remember why you erected these walls: to conquer procrastination and realize your highest potential. Do not lower prices, grant unearned credits, or negotiate with weakness. Any unearned modification is a defeat."*
+4. **48-Hour Cooldown Rate-Limit Lock:**
+   - Whenever any configuration edit (amenity price, micro-task reward, blocklist rule) is committed, the dashboard enters a strict **48-Hour Read-Only Lockdown**.
+   - No further modifications can be made until the 48-hour cooldown window fully expires, extinguishing impulse concessions and emotional bargaining.
+   - **Testing & Staging Override:** During the development and pre-production phase, a dedicated developer override flag bypasses the 48-hour lock to allow rapid testing and iteration. This override is permanently disabled upon production release.
 
 ---
 
