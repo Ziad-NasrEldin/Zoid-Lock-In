@@ -23,9 +23,17 @@ let package = Package(
             name: "ZoidLockInFilterExtension",
             targets: ["ZoidLockInFilterExtension"]
         ),
+        .library(
+            name: "ZoidLockInEconomy",
+            targets: ["ZoidLockInEconomy"]
+        ),
         .executable(
             name: "ZoidLockInDaemon",
             targets: ["ZoidLockInDaemon"]
+        ),
+        .executable(
+            name: "ZoidLockInApp",
+            targets: ["ZoidLockInApp"]
         ),
     ],
     targets: [
@@ -34,6 +42,7 @@ let package = Package(
             path: "Sources/ZoidLockInCore",
             linkerSettings: [
                 .linkedFramework("Security"),
+                .linkedFramework("CoreGraphics"),
             ]
         ),
         .target(
@@ -65,10 +74,31 @@ let package = Package(
                 .linkedFramework("NetworkExtension"),
             ]
         ),
+        // User-space WAL ledger + SUMI-E ticker. Must not be a dependency of
+        // ZoidLockInDaemon — SQLite/GRDB stay out of the privileged helper.
+        .target(
+            name: "ZoidLockInEconomy",
+            dependencies: ["ZoidLockInCore"],
+            path: "Sources/ZoidLockInEconomy",
+            linkerSettings: [
+                .linkedLibrary("sqlite3"),
+                .linkedFramework("SwiftUI"),
+                .linkedFramework("AppKit"),
+            ]
+        ),
         .executableTarget(
             name: "ZoidLockInDaemon",
             dependencies: ["ZoidLockInCore", "ZoidLockInEnforcer", "ZoidLockInIPC"],
             path: "Sources/ZoidLockInDaemon"
+        ),
+        .executableTarget(
+            name: "ZoidLockInApp",
+            dependencies: ["ZoidLockInCore", "ZoidLockInEconomy"],
+            path: "Sources/ZoidLockInApp",
+            linkerSettings: [
+                .linkedFramework("SwiftUI"),
+                .linkedFramework("AppKit"),
+            ]
         ),
         .testTarget(
             name: "ZoidLockInTests",
@@ -77,6 +107,7 @@ let package = Package(
                 "ZoidLockInEnforcer",
                 "ZoidLockInFilterExtension",
                 "ZoidLockInIPC",
+                "ZoidLockInEconomy",
             ],
             path: "Tests/ZoidLockInTests"
         ),

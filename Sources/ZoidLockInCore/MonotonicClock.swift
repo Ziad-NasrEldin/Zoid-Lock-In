@@ -127,6 +127,35 @@ public struct FixedWallClock: WallClockProviding, Sendable {
     }
 }
 
+/// Mutable wall clock for economic tests. Advance in lockstep with a monotonic
+/// clock so the anti-time-travel guard does not treat simulated focus as tamper.
+public final class ManualWallClock: WallClockProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var date: Date
+
+    public init(_ date: Date) {
+        self.date = date
+    }
+
+    public func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        return date
+    }
+
+    public func set(_ date: Date) {
+        lock.lock()
+        self.date = date
+        lock.unlock()
+    }
+
+    public func advance(by delta: TimeInterval) {
+        lock.lock()
+        date = date.addingTimeInterval(delta)
+        lock.unlock()
+    }
+}
+
 /// Boot-session identity. Persisted passes (never used) and cooldown restoration
 /// compare this UUID so a reboot cannot resurrect a previous boot's monotonic timestamps.
 public enum BootSession: Sendable {
