@@ -18,7 +18,7 @@ The **Zoid 0 Life Credit Exchange** (internally known as **The Trading Center**)
 ```mermaid
 flowchart TD
     DayStart["00:00: Day Begins (0 Credits)"] --> MorningBlock["Morning 90-Min Focus Block"]
-    MorningBlock --> MomentumBonus["Award Base (1.5) * 1.5x Multiplier = 2.25 Credits"]
+    MorningBlock --> MomentumBonus["Award Base (1.5) * 2.0x Multiplier = 3.0 Credits"]
     
     WorkSession["Standard Deep Work (Zoid 0 Auto-Track)"] --> RegularEarn["+1.0 Credit / Hour (0.5 / 30 min)"]
     OfflineMeeting["Offline Meeting (Punch-In/Out + Mandatory Evidence)"] --> MeetingEarn["Verified Duration Converted to Credits"]
@@ -44,8 +44,8 @@ flowchart TD
 ### 2.2. The 90-Minute Momentum Rule (Cold-Start Breaker)
 To resolve the morning cold-start dilemma and create immediate forward momentum:
 - **Condition:** Completing the day's first continuous, uninterrupted **90-minute focus block** (1.5 hours of work).
-- **Reward:** Applies a multiplicative **1.5x multiplier** to the session's earnings: 1.5 base credits × 1.5 = **2.25 credits** (a 1.5x yield rather than an additive +1.5 flat bonus).
-- **Impact:** Immediately accelerates early-day momentum, securing sufficient credits for early breaks or funding the majority of the bed amenity.
+- **Reward:** Applies a multiplicative **2.0x multiplier** (double rate) to the session's earnings: 1.5 base credits × 2.0 = **3.0 credits** earned.
+- **Impact:** Immediately accelerates early-day momentum, securing 3.0 credits which fully satisfies the daily bed amenity or multiple midday rest cycles right from the morning block.
 
 ### 2.3. Dual-Gate Offline Meeting Verification
 For professional commitments occurring off-screen (in-person client meetings, physical strategy sessions, on-site tasks):
