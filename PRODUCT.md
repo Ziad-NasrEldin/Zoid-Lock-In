@@ -53,17 +53,21 @@ To resolve the morning cold-start dilemma and create immediate forward momentum:
 - **Reward:** Applies a multiplicative **2.0x multiplier** (double rate) to the session's earnings: 1.5 base credits × 2.0 = **3.0 credits** earned.
 - **Impact:** Immediately accelerates early-day momentum, securing 3.0 credits which fully satisfies the daily bed amenity or multiple midday rest cycles right from the morning block.
 
-### 2.3. Dual-Gate Offline Meeting Verification
+### 2.3. Triple-Gate Offline Meeting Verification (Gemini AI Audit)
 For professional commitments occurring off-screen (in-person client meetings, physical strategy sessions, on-site tasks):
 1. **Gate 1 (Time Tracking):**
    - User triggers **Punch-In** at the exact start time.
    - User triggers **Punch-Out** immediately upon conclusion.
 2. **Gate 2 (Mandatory Verification Bundle):**
-   - Credits remain in a **Pending Audit** state until the following three artifacts are attached:
-     1. **Agenda & Summary Note:** Bulleted record of meeting objectives and outcomes.
-     2. **Physical / Digital Documentation:** Formal receipt, invoice, signed memo, or calendar invite.
-     3. **Contextual Photo:** Physical timestamped photo of the meeting location or environment.
-- **Resolution:** Once both gates are fulfilled, duration is credited directly to the active daily balance.
+   - Three mandatory artifacts must be attached:
+     1. **Agenda & Summary Note:** Detailed record of meeting objectives and discussion points.
+     2. **Physical / Digital Documentation:** Formal receipt, invoice, payment slip, or calendar invite.
+     3. **Contextual Photo:** Physical timestamped photo of the meeting environment or participants.
+3. **Gate 3 (Multimodal Gemini AI Audit Engine):**
+   - The bundle is dispatched to a multimodal **Gemini API model** for strict verification.
+   - The model inspects the photo and document imagery against the agenda notes and duration for contextual authenticity and timestamps.
+   - **Resolution:** Instant approval releases credits into the daily wallet; strict rejection provides constructive denial rationale.
+   - **Appeal Protocol:** To prevent frivolous circumvention, the user can only file an official appeal after **three consecutive rejections** on the same session, logging the appeal to the permanent dashboard audit trail.
 
 ### 2.4. Customizable Micro-Habits & Daily Discipline Tasks
 To incentivize essential personal hygiene, wellness, and baseline discipline routines:
@@ -80,6 +84,12 @@ To incentivize essential personal hygiene, wellness, and baseline discipline rou
   - Strict daily frequency caps per task prevent credit spamming.
   - Overall micro-habit earnings are capped at a maximum of **1.5 credits total per day**, ensuring that the remaining core credits must be produced through genuine deep work.
 
+### 2.5. Permanent Friday Rest Day Mode
+To prevent systemic burnout and support sustainable high performance:
+- **Hardcoded Cadence:** Every **Friday** is designated as the official weekly rest day.
+- **Permanent System Lock:** Friday Rest Mode is permanently hardcoded into the application core. It **cannot be edited, rescheduled, or toggled off**, even with full 2FA Admin Dashboard privileges.
+- **Rest Rules:** Baseline amenities (sleeping in bed, standard food delivery, personal phone time) have **0 credit cost**. Work targets are relaxed/open, and no end-of-day deficit penalties are evaluated.
+
 ---
 
 ## 3. Hard Digital Enforcement Matrix
@@ -92,15 +102,16 @@ Distractions are disabled on macOS and paired iOS devices by default.
 
 ### 3.2. Web Domain & Network Lockdown
 - **Target Domains:** `youtube.com`, `reddit.com`, `facebook.com`, `instagram.com`, `x.com` (Twitter), `tiktok.com`, `twitch.tv`, `netflix.com`.
-- **Mechanism:** System-level host/packet routing or Zoid 0 companion browser shield. Blocked destinations render a clean Zoid 0 "Trading Center: Access Locked" screen.
+- **Food Delivery Portals:** `talabat.com`, `ubereats.com`, `elmenus.com`, and related online food ordering websites.
+- **Mechanism:** System-level host/packet routing or browser shield across macOS (Mac Mini) and mobile. Blocked destinations render a clean Zoid Lock In "Access Locked: Spend Credits to Unlock" gateway.
 
 ### 3.3. Cross-Device Closure (Apple Shortcuts & Focus Mode)
-- **Problem:** Desktop locks cause subconscious redirection to mobile screens.
+- **Problem:** Desktop process locks cause subconscious redirection to mobile screens and mobile food ordering apps.
 - **Solution:** Bi-directional Apple Shortcuts and native macOS/iOS Focus Filter automation.
 - **Action:**
-  - Initiating focus sessions in Zoid 0 triggers **Work Mode** across macOS and iOS via iCloud sync.
-  - Silences all notifications and locks mobile social apps.
-  - Purchasing mobile passes temporarily disengages the mobile focus shield for the exact purchased duration.
+  - Initiating focus sessions triggers **Work Mode** across macOS and iOS via iCloud sync.
+  - Silences all notifications and locks mobile entertainment, social, and food ordering applications (Talabat, Uber Eats, etc.).
+  - Purchasing passes (e.g., Food Pass or Phone Pass) temporarily disengages the corresponding mobile shield for the exact purchased window.
 
 ---
 
@@ -111,7 +122,7 @@ Distractions are disabled on macOS and paired iOS devices by default.
 | Tier | Amenity Item | Target Cost | Enforcement Mechanism |
 | :--- | :--- | :--- | :--- |
 | **Baseline Comfort** | Sleeping in Bed | 3.0 Credits | Self-enforced behavioral contract (Alternative: floor / couch) |
-| **Food & Convenience** | Ordering Food Delivery (Uber Eats, Talabat) | 2.5 Credits | Pass required before placing order |
+| **Food Delivery** | Ordering Food Delivery (Talabat, Uber Eats) | 2.5 Credits | 30-min window unblocking delivery apps & websites on Mac/Phone |
 | **Digital Distraction** | 1 Hour Phone / Social Browsing | 1.5 Credits | Apple Focus Mode temporary release (60 min) |
 | **Streaming / Video** | 1 Hour YouTube / Entertainment Video | 1.5 Credits | Network domain unblock window (60 min) |
 | **Gaming** | 30 Minutes Gaming Session | 1.5 Credits | macOS process barrier release (30 min) |
@@ -128,8 +139,13 @@ Distractions are disabled on macOS and paired iOS devices by default.
 
 ### 5.2. Midnight Expiration & Reconciliation
 - At **23:59:59**, the active daily wallet balance is reconciled to **0.0**.
-- **The Permanent Surplus Vault:** Surplus unspent credits do not disappear into a void; they are logged into a permanent **"Lifetime Surplus Vault"** displayed on the Zoid 0 dashboard. This creates long-term pride of discipline and reserves optionality for future long-term expansions.
+- **The Permanent Surplus Vault:** Surplus unspent credits do not disappear into a void; they are logged into a permanent **"Lifetime Surplus Vault"** displayed on the Zoid Lock In dashboard. This creates long-term pride of discipline and reserves optionality for future long-term expansions.
 - **Daily Victory Streak Score:** Finishing the day with the daily target met (all baseline amenities paid and zero deficit) increments the consecutive **Victory Streak**.
+
+### 5.3. End-of-Day Deficit Strikes & Disciplinary Carry-Over
+- **Deficit Strike Logging:** If a non-rest day concludes with verified earnings below the 3.0 credit baseline (failing to afford fundamental living comforts), the system logs a permanent **"Deficit Strike"** to the dashboard history.
+- **-1.0 Credit Disciplinary Debt (-1 Hour Penalty):** The following morning automatically initializes at **-1.0 Credits** rather than zero.
+- **Repayment Constraint:** The user must complete 1 full hour of verified productive work simply to pay off the deficit and return to 0.0 before any new credits can be accumulated for amenities.
 
 ---
 
@@ -191,17 +207,20 @@ To ensure sustainability and prevent psychological rejection of the system:
 
 ---
 
-## 9. System Architecture & Zoid 0 Integration Map
+## 9. System Architecture & Dual Surface UI Matrix
 
 - **Standalone Platform:** Native macOS desktop application (Swift 6, SwiftUI) packaged and versioned independently as **Zoid Lock In**.
-- **Design Standard:** **SUMI-E Ink** visual aesthetic (paper/ink tones, restrained seal-red accents, serif headers).
+- **Dual Surface Form Factor:**
+  1. *Persistent Menu Bar Companion (`MenuBarExtra`):* Sits in the macOS menu bar displaying real-time daily credit balance, active session duration, and quick-purchase popover for instant unblocks.
+  2. *Command Dashboard Window:* Full-scale standalone application window rendered in the **SUMI-E Ink** visual aesthetic (ink and paper tones, restrained seal-red accents, serif headers) for complete marketplace browsing, offline meeting logging, streak review, and 2FA settings.
 - **Integrated Zoid 0 Technology:**
   1. *Screenwatch & Session Tracker:* Adopts Zoid 0's native workspace session tracking and application-level duration measurement primitives to verify deep work without manual timesheets.
   2. *Meeting Infrastructure:* Adopts Zoid 0's meeting verification logic for offline work logging and proof attachment.
 - **Dedicated Zoid Lock In Modules:**
   1. `TradingCenterView`: Live wallet balance, active lock statuses, catalog grid, and purchase triggers.
-  2. `EnforcementDaemon`: Background observer managing process termination and domain shield enforcement.
-  3. `OfflineSessionCoordinator`: Punch-in/out timer with evidence file dropzone.
-  4. `SecurityGatekeeper`: Password hashing, Google Authenticator TOTP verification, and automated alert email dispatcher.
-  5. `CooldownManager`: Enforces the 48-hour configuration rate-limit lockout with development/testing bypass toggles.
-  6. `ShortcutBridge`: System-level webhook and Apple Shortcuts sync for cross-device Focus Mode engagement.
+  2. `EnforcementDaemon`: Background observer managing process termination and domain shield enforcement across Mac Mini and phone.
+  3. `GeminiAuditService`: Multimodal API client analyzing offline meeting photos, receipts, and agenda notes for automated approval or rejection, managing the 3-rejection appeal threshold.
+  4. `OfflineSessionCoordinator`: Punch-in/out timer with evidence file dropzone.
+  5. `SecurityGatekeeper`: Password hashing, Google Authenticator TOTP verification, and automated alert email dispatcher.
+  6. `CooldownManager`: Enforces the 48-hour configuration rate-limit lockout with development/testing bypass toggles.
+  7. `ShortcutBridge`: System-level webhook and Apple Shortcuts sync for cross-device Focus Mode engagement.
