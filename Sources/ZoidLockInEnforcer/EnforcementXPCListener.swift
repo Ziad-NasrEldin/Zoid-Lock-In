@@ -24,6 +24,11 @@ public final class EnforcementXPCListener: NSObject, NSXPCListenerDelegate, @unc
             return false
         }
 
+        let clientRequirement = daemon.gatekeeper.requirementString
+        if CodeRequirement.isTeamIDPinned(clientRequirement) {
+            newConnection.setCodeSigningRequirement(clientRequirement)
+        }
+
         newConnection.exportedInterface = NSXPCInterface(with: ZoidLockInEnforcementXPC.self)
         newConnection.exportedObject = exporter
         newConnection.invalidationHandler = { [weak daemon] in

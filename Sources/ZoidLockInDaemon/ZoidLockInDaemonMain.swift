@@ -7,20 +7,30 @@ import ZoidLockInIPC
 ///
 /// Does not import `ZoidLockInFilterExtension`. The content filter lives in the
 /// `com.mavoid.zoidlockin.filter` system extension; this process only runs the
-/// process sentinel and the authenticated XPC listener.
+/// process sentinel, the authenticated XPC listener, and the durable incident log.
 @main
 struct ZoidLockInDaemonMain {
     static func main() {
-        let daemon = EnforcementDaemon()
+        let storage = FileEmergencyIncidentStore.defaultPrivilegedDirectory
+        let incidents = FileEmergencyIncidentStore(directory: storage)
+        let filterStatus = FileFilterStatusStore(directory: storage)
+        let daemon = EnforcementDaemon(
+            clock: MachContinuousTimeClock(),
+            incidentStore: incidents,
+            filterStatusSink: filterStatus,
+            bootSessionUUID: BootSession.currentUUID(),
+            storageDirectory: storage
+        )
 
         // Fail-closed: apply full lockdown immediately on boot / respawn.
+        // Emergency passes do not resume across reboot; incidents and cooldown do.
         daemon.applyPolicy(.lockedDown)
         daemon.start()
         daemon.startMachServiceListener()
 
         FileHandle.standardError.write(
             Data(
-                "[ZoidLockInDaemon] \(DaemonConfiguration.label) started (KeepAlive + ThrottleInterval=1, MachService=\(ZoidLockInIdentity.enforcementMachServiceName))\n"
+                "[ZoidLockInDaemon] \(DaemonConfiguration.label) started (KeepAlive + ThrottleInterval=1, MachService=\(ZoidLockInIdentity.enforcementMachServiceName), incidents=\(FileEmergencyIncidentStore.defaultDirectoryPath)/\(FileEmergencyIncidentStore.defaultFileName))\n"
                     .utf8
             )
         )

@@ -29,11 +29,22 @@ public struct FilterFlowRequest: Sendable, Equatable {
 /// Inspected TCP/UDP ports fail closed when the hostname is missing, empty, or
 /// an IP literal. UDP/443 (QUIC / HTTP/3) is inspected with the same rule so it
 /// cannot bypass the TCP-only matcher.
+///
+/// An active daemon pass (`passIsActive`) allows inspected flows for the
+/// duration of the pass, including unverified hostnames, then the caller must
+/// re-evaluate against lockdown after expiry.
 public struct FilterFlowEvaluator: Sendable, Equatable {
     public var policy: EnforcementPolicy
+    public var passIsActive: Bool
 
-    public init(policy: EnforcementPolicy = .lockedDown) {
+    public init(policy: EnforcementPolicy = .lockedDown, passIsActive: Bool = false) {
         self.policy = policy
+        self.passIsActive = passIsActive
+    }
+
+    public init(snapshot: FilterEnforcementSnapshot) {
+        self.policy = snapshot.enforcementPolicy
+        self.passIsActive = snapshot.isPassActive
     }
 
     public func verdict(for request: FilterFlowRequest) -> FilterVerdict {
@@ -41,6 +52,10 @@ public struct FilterFlowEvaluator: Sendable, Equatable {
         case .other:
             return .allow
         case .tcp, .udp:
+            if passIsActive {
+                return .allow
+            }
+
             if let port = request.port, !policy.shouldInspect(port: port) {
                 return .allow
             }

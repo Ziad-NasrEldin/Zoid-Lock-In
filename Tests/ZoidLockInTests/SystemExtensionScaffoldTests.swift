@@ -138,6 +138,26 @@ struct FilterFlowEvaluatorTests {
         )
     }
 
+    @Test("active pass allows blacklisted and unverified inspected flows")
+    func activePassAllowsInspectedFlows() {
+        let evaluator = FilterFlowEvaluator(policy: .lockedDown, passIsActive: true)
+        #expect(
+            evaluator.verdict(
+                for: FilterFlowRequest(hostname: "youtube.com", port: 443, transport: .udp)
+            ) == .allow
+        )
+        #expect(
+            evaluator.verdict(
+                for: FilterFlowRequest(hostname: nil, port: 443, transport: .udp)
+            ) == .allow
+        )
+        #expect(
+            evaluator.verdict(
+                for: FilterFlowRequest(hostname: "talabat.com", port: 443, transport: .tcp)
+            ) == .allow
+        )
+    }
+
     @Test("proxy ports 8080 and 1080 fail closed without a hostname")
     func proxyPortsFailClosed() {
         let evaluator = FilterFlowEvaluator(policy: .lockedDown)

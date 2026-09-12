@@ -144,8 +144,11 @@ public final class EmergencySafetyValveCoordinator: @unchecked Sendable {
     private let mailer: any EmergencyIncidentAlerting
     private let dispatcher: any EmergencySafetyValveDispatching
 
+    private var confirmInFlight = false
+    public private(set) var lastMailError: Error?
+
     public init(
-        clock: any MonotonicTimeProviding = MachAbsoluteTimeClock(),
+        clock: any MonotonicTimeProviding = MachContinuousTimeClock(),
         wallClock: any WallClockProviding = SystemWallClock(),
         debtStore: any PendingDebtStoring,
         mailer: any EmergencyIncidentAlerting,
@@ -181,20 +184,26 @@ public final class EmergencySafetyValveCoordinator: @unchecked Sendable {
         withLock { engine.cancel() }
     }
 
-    /// Fires only after a complete 5.0s hold. Side effects: XPC unlock, -2.0 debt, Resend mail.
+    /// Fires only after a complete 5.0s hold. The daemon writes the incident and
+    /// pass first; mail is best-effort and must not roll back a granted pass.
     public func confirm() async throws {
-        let snapshot = withLock { engine.state }
-
-        switch snapshot.phase {
-        case .activated:
-            throw EmergencySafetyValveError.alreadyActivated
-        case .cancelled:
-            throw EmergencySafetyValveError.cancelled
-        case .idle, .holding:
-            throw EmergencySafetyValveError.holdIncomplete
-        case .readyToConfirm:
-            break
+        try withLock { () throws in
+            switch engine.state.phase {
+            case .activated:
+                throw EmergencySafetyValveError.alreadyActivated
+            case .cancelled:
+                throw EmergencySafetyValveError.cancelled
+            case .idle, .holding:
+                throw EmergencySafetyValveError.holdIncomplete
+            case .readyToConfirm:
+                break
+            }
+            if confirmInFlight {
+                throw EmergencySafetyValveError.alreadyActivated
+            }
+            confirmInFlight = true
         }
+        defer { withLock { confirmInFlight = false } }
 
         try await dispatcher.engageEmergencySafetyValve()
 
@@ -209,12 +218,16 @@ public final class EmergencySafetyValveCoordinator: @unchecked Sendable {
             eventType: "EMERGENCY_OVERRIDE",
             creditDebt: Self.emergencyDebtCredits
         )
-        try await mailer.dispatchEmergencyIncident(report)
+        do {
+            try await mailer.dispatchEmergencyIncident(report)
+        } catch {
+            withLock { lastMailError = error }
+        }
     }
 
-    private func withLock<T>(_ body: () -> T) -> T {
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
         defer { lock.unlock() }
-        return body()
+        return try body()
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Reverse-DNS identifiers for the three Slice 1 processes.
 ///
@@ -16,6 +17,7 @@ public enum ZoidLockInIdentity: Sendable {
     public static let enforcementMachServiceName = "com.mavoid.zoidlockin.enforcement"
 
     /// Environment variable that replaces the `TEAMID` placeholder at runtime.
+    /// The value must be a sanitized 10-character Team ID; anything else is ignored.
     public static let teamIdentifierEnvironmentVariable = "ZOID_LOCK_IN_TEAM_ID"
 
     /// Placeholder used until a real Apple Developer Team ID is supplied.
@@ -23,18 +25,65 @@ public enum ZoidLockInIdentity: Sendable {
 
     /// Team-ID-pinned client requirement template. Do not implement
     /// `anchor apple generic` without `certificate leaf[subject.OU]`.
+    /// This string is documentation; always go through `xpcClientRequirement(teamID:)`.
     public static let xpcClientRequirementTemplate =
         "anchor apple generic and certificate leaf[subject.OU] = \"TEAMID\" and identifier \"com.mavoid.zoidlockin\""
 
     public static func resolvedTeamIdentifier(
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        ownTeamIdentifier: String? = nil,
+        queryOwnSignature: Bool = true
     ) -> String {
         let trimmed = environment[teamIdentifierEnvironmentVariable]?
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        if let trimmed, !trimmed.isEmpty {
-            return trimmed
+        if let trimmed, let sanitized = CodeRequirement.sanitizedTeamIdentifier(trimmed),
+           sanitized != teamIdentifierPlaceholder {
+            return sanitized
         }
+
+        if let ownTeamIdentifier, let sanitized = CodeRequirement.sanitizedTeamIdentifier(ownTeamIdentifier),
+           sanitized != teamIdentifierPlaceholder {
+            return sanitized
+        }
+
+        if queryOwnSignature,
+           let signed = teamIdentifierFromOwnCodeSignature(),
+           let sanitized = CodeRequirement.sanitizedTeamIdentifier(signed),
+           sanitized != teamIdentifierPlaceholder {
+            return sanitized
+        }
+
         return teamIdentifierPlaceholder
+    }
+
+    /// Reads the Team ID from this process's code signature via `SecCodeCopySelf`.
+    /// Returns nil when unsigned, ad-hoc, or the Team ID is missing / malformed.
+    public static func teamIdentifierFromOwnCodeSignature() -> String? {
+        var code: SecCode?
+        let selfStatus = SecCodeCopySelf([], &code)
+        guard selfStatus == errSecSuccess, let code else {
+            return nil
+        }
+
+        var staticCode: SecStaticCode?
+        let staticStatus = SecCodeCopyStaticCode(code, [], &staticCode)
+        guard staticStatus == errSecSuccess, let staticCode else {
+            return nil
+        }
+
+        var information: CFDictionary?
+        let infoStatus = SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        )
+        guard infoStatus == errSecSuccess,
+              let info = information as? [String: Any],
+              let team = info[kSecCodeInfoTeamIdentifier as String] as? String else {
+            return nil
+        }
+
+        return CodeRequirement.sanitizedTeamIdentifier(team)
     }
 
     public static func xpcClientRequirement(teamID: String) -> String {
@@ -48,6 +97,13 @@ public enum ZoidLockInIdentity: Sendable {
         CodeRequirement(
             teamID: teamID,
             identifier: daemonLabel
+        ).requirementString
+    }
+
+    public static func xpcFilterQueryRequirement(teamID: String) -> String {
+        CodeRequirement(
+            teamID: teamID,
+            identifier: filterSystemExtensionBundleIdentifier
         ).requirementString
     }
 }

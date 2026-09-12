@@ -2,19 +2,26 @@ import Foundation
 import ZoidLockInCore
 import ZoidLockInIPC
 
-/// Privileged enforcement daemon. Owns the process sentinel, monotonic pass
-/// expiry, heartbeat fail-closed watchdog, and authenticated XPC listener.
+/// Privileged enforcement daemon. Owns the process sentinel, continuous
+/// monotonic pass expiry, heartbeat fail-closed watchdog, durable emergency
+/// incident log, and authenticated XPC listener.
 ///
 /// Does **not** instantiate `ContentFilterProvider`; that type lives in
-/// `ZoidLockInFilterExtension`.
-public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcementServicing, EmergencySafetyValveDispatching {
+/// `ZoidLockInFilterExtension`. The daemon publishes filter status through
+/// `FilterPolicyHub` (and optionally a file store) for query-only consumption.
+public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcementServicing, EmergencySafetyValveDispatching, FilterEnforcementStatusReading {
     public let configuration: DaemonConfiguration
     public let registrar: DaemonServiceRegistrar
     public let processSentinel: ProcessSentinel
     public let clock: any MonotonicTimeProviding
+    public let wallClock: any WallClockProviding
     public let gatekeeper: XPCAuditTokenGatekeeper
     public let auditLog: XPCConnectionAuditLog
+    public let filterPolicyHub: FilterPolicyHub
+    public let incidentStore: any EmergencyIncidentStoring
+    public let bootSessionUUID: String
 
+    private let filterStatusSink: (any FilterEnforcementStatusPublishing)?
     private let lock = NSLock()
     private var basePolicy: EnforcementPolicy
     private var effectivePolicy: EnforcementPolicy
@@ -26,28 +33,43 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     private var watchdog: DispatchSourceTimer?
     private var machListener: NSXPCListener?
     private var listenerDelegate: EnforcementXPCListener?
+    private var lastObservedMonotonicSeconds: TimeInterval?
 
     public init(
         configuration: DaemonConfiguration = DaemonConfiguration(),
         policy: EnforcementPolicy = .lockedDown,
         processSentinel: ProcessSentinel? = nil,
-        clock: any MonotonicTimeProviding = MachAbsoluteTimeClock(),
+        clock: any MonotonicTimeProviding = MachContinuousTimeClock(),
+        wallClock: any WallClockProviding = SystemWallClock(),
         gatekeeper: XPCAuditTokenGatekeeper = XPCAuditTokenGatekeeper(),
-        auditLog: XPCConnectionAuditLog = XPCConnectionAuditLog()
+        auditLog: XPCConnectionAuditLog = XPCConnectionAuditLog(),
+        filterPolicyHub: FilterPolicyHub = FilterPolicyHub(),
+        incidentStore: (any EmergencyIncidentStoring)? = nil,
+        filterStatusSink: (any FilterEnforcementStatusPublishing)? = nil,
+        bootSessionUUID: String = BootSession.currentUUID(),
+        storageDirectory: URL? = nil
     ) {
+        let directory = storageDirectory ?? FileEmergencyIncidentStore.makeIsolatedDirectory()
         self.configuration = configuration
         self.registrar = DaemonServiceRegistrar(configuration: configuration)
         self.basePolicy = policy
         self.effectivePolicy = policy
         self.clock = clock
+        self.wallClock = wallClock
         self.gatekeeper = gatekeeper
         self.auditLog = auditLog
+        self.filterPolicyHub = filterPolicyHub
+        self.incidentStore = incidentStore ?? FileEmergencyIncidentStore(directory: directory)
+        self.filterStatusSink = filterStatusSink
+        self.bootSessionUUID = bootSessionUUID
         self.processSentinel = processSentinel ?? ProcessSentinel(
             matcher: policy.processMatcher,
             scanInterval: policy.processScanIntervalSeconds,
             mode: policy.mode
         )
         self.processSentinel.apply(policy)
+        restoreCooldownFromIncidents()
+        publishEffectivePolicy(at: clock.nowSeconds())
     }
 
     public var currentPolicy: EnforcementPolicy {
@@ -58,6 +80,16 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         withLock { passController.active }
     }
 
+    public func currentFilterSnapshot() -> FilterEnforcementSnapshot {
+        let now = clock.nowSeconds()
+        publishEffectivePolicy(at: now)
+        return filterPolicyHub.currentFilterSnapshot()
+    }
+
+    public func incidents() -> [EmergencyIncidentRecord] {
+        incidentStore.allIncidents()
+    }
+
     /// Direct policy mutation used at boot and by tests. Not an XPC entry point.
     public func applyPolicy(_ policy: EnforcementPolicy) {
         withLock { basePolicy = policy }
@@ -65,12 +97,16 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     }
 
     public func applyPolicy(_ snapshot: EnforcementPolicySnapshot) async throws {
-        var incoming = snapshot.makePolicy()
-        incoming.mode = .hard
+        let incoming = try snapshot.validatedPolicy()
         applyPolicy(incoming)
     }
 
     public func openPass(kind: PassKind, durationSeconds: Int, nonce: String) async throws {
+        _ = durationSeconds
+        if kind != .emergency {
+            throw EnforcementControlError.amenityPassRequiresVoucher
+        }
+
         let replayed = withLock { () -> Bool in
             if usedNonces.contains(nonce) {
                 return true
@@ -79,19 +115,10 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
             return false
         }
         if replayed {
-            throw ZoidLockInXPCError.make(4, message: "Replay nonce rejected")
+            throw EnforcementControlError.replayNonceRejected
         }
 
-        if kind == .emergency {
-            try await engageEmergencySafetyValve()
-            return
-        }
-
-        let now = clock.nowSeconds()
-        withLock {
-            passController.open(kind: kind, durationSeconds: TimeInterval(durationSeconds), at: now)
-        }
-        publishEffectivePolicy(at: now)
+        try await engageEmergencySafetyValve()
     }
 
     public func revokePass(kind: PassKind) async throws {
@@ -105,30 +132,38 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     }
 
     public func queryStatus() async throws -> EnforcementStatus {
-        let now = clock.nowSeconds()
-        publishEffectivePolicy(at: now)
-
-        return withLock {
-            if let pass = passController.active, pass.isActive(at: now) {
-                return EnforcementStatus(
-                    mode: effectivePolicy.mode,
-                    isLockedDown: false,
-                    activePassKind: pass.kind,
-                    remainingPassSeconds: Int(pass.remainingSeconds(at: now).rounded(.towardZero))
-                )
-            }
-            return EnforcementStatus(
-                mode: effectivePolicy.mode,
-                isLockedDown: true,
-                activePassKind: nil,
-                remainingPassSeconds: 0
-            )
-        }
+        let snapshot = currentFilterSnapshot()
+        return EnforcementStatus(
+            mode: snapshot.enforcementPolicy.mode,
+            isLockedDown: snapshot.isLockedDown,
+            activePassKind: snapshot.activePassKind,
+            remainingPassSeconds: snapshot.remainingPassSeconds
+        )
     }
 
     public func engageEmergencySafetyValve() async throws {
         let now = clock.nowSeconds()
-        withLock { passController.engageEmergency(at: now) }
+        let utc = wallClock.now()
+        let boot = bootSessionUUID
+
+        try withLock { () throws in
+            try passController.expireIfNeededThenEnsureEmergencyAllowed(
+                at: now,
+                utcNow: utc,
+                bootSessionUUID: boot
+            )
+            let incident = EmergencyIncidentRecord.emergency(
+                monotonicStartedAtSeconds: now,
+                utcTimestamp: utc,
+                bootSessionUUID: boot
+            )
+            try incidentStore.append(incident)
+            passController.commitEmergency(
+                at: now,
+                utcNow: utc,
+                bootSessionUUID: boot
+            )
+        }
         publishEffectivePolicy(at: now)
     }
 
@@ -166,14 +201,12 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
 
     public func noteClientDisconnected(at time: TimeInterval? = nil) {
         let now = time ?? clock.nowSeconds()
-        let remaining = withLock { () -> Int in
+        withLock {
             liveConnectionCount = max(0, liveConnectionCount - 1)
             if liveConnectionCount == 0 {
                 heartbeatMonitor.noteConnectionLost(at: now)
             }
-            return liveConnectionCount
         }
-        _ = remaining
         evaluateWatchdogs(at: now)
     }
 
@@ -244,11 +277,32 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         timer.resume()
     }
 
+    private func restoreCooldownFromIncidents() {
+        let incidents = incidentStore.allIncidents()
+        guard let last = incidents.last(where: { $0.kind == .emergency }) else {
+            return
+        }
+        passController.restoreCooldown(
+            startedAt: last.monotonicStartedAtSeconds,
+            utc: last.utcTimestamp,
+            bootSessionUUID: last.bootSessionUUID
+        )
+    }
+
     private func publishEffectivePolicy(at time: TimeInterval) {
-        let next = withLock { () -> EnforcementPolicy in
+        let next = withLock { () -> (EnforcementPolicy, FilterEnforcementSnapshot) in
+            let clockNow = clock.nowSeconds()
+            if let last = lastObservedMonotonicSeconds, clockNow + 0.000_001 < last {
+                passController.revoke()
+                basePolicy = .lockedDown
+            } else {
+                lastObservedMonotonicSeconds = clockNow
+            }
+
             passController.expireIfNeeded(at: time)
 
-            let passActive = passController.active?.isActive(at: time) == true
+            let pass = passController.active
+            let passActive = pass?.isActive(at: time) == true
             if heartbeatMonitor.hasTimedOut(at: time), !passActive {
                 basePolicy = .lockedDown
             }
@@ -260,14 +314,25 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
                 policy.mode = .hard
             }
             effectivePolicy = policy
-            return policy
+
+            let remaining = passActive ? Int(pass?.remainingSeconds(at: time).rounded(.towardZero) ?? 0) : 0
+            let snapshot = FilterEnforcementSnapshot(
+                enforcementPolicy: policy,
+                isPassActive: passActive,
+                activePassKind: passActive ? pass?.kind : nil,
+                remainingPassSeconds: remaining,
+                isLockedDown: !passActive
+            )
+            return (policy, snapshot)
         }
-        processSentinel.apply(next)
+        processSentinel.apply(next.0)
+        filterPolicyHub.publish(next.1)
+        filterStatusSink?.publish(next.1)
     }
 
-    private func withLock<T>(_ body: () -> T) -> T {
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
         defer { lock.unlock() }
-        return body()
+        return try body()
     }
 }

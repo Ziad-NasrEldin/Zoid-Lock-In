@@ -52,9 +52,10 @@ public struct EnforcementPolicy: Sendable, Equatable {
     public func flowVerdict(
         hostname: String?,
         port: UInt16?,
-        transport: TransportProtocol
+        transport: TransportProtocol,
+        passIsActive: Bool = false
     ) -> FilterVerdict {
-        FilterFlowEvaluator(policy: self).verdict(
+        FilterFlowEvaluator(policy: self, passIsActive: passIsActive).verdict(
             for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
         )
     }

@@ -57,7 +57,7 @@ let package = Package(
         // ZoidLockInDaemon — LaunchDaemons cannot host NEFilterDataProvider.
         .target(
             name: "ZoidLockInFilterExtension",
-            dependencies: ["ZoidLockInCore", "ZoidLockInIPC"],
+            dependencies: ["ZoidLockInCore"],
             path: "Sources/ZoidLockInFilterExtension",
             exclude: ["Resources"],
             linkerSettings: [

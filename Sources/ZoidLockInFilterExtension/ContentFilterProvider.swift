@@ -5,14 +5,16 @@ import NetworkExtension
 import ZoidLockInCore
 
 /// System-extension `NEFilterDataProvider` that drops outbound TCP and UDP flows
-/// to blacklisted domains.
+/// to blacklisted domains unless a daemon-published pass is active.
 ///
 /// This class is the Network Extension **principal class**. It must not be
-/// hosted in the LaunchDaemon. Slice 2 talks to the daemon over XPC; the
-/// daemon never instantiates this type.
+/// hosted in the LaunchDaemon. Filter status is **query-only**: inject a
+/// `FilterEnforcementStatusReading` (hub or daemon-written file). Never read
+/// UI-written shared files.
 public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var _policy: EnforcementPolicy
+    private let engine: ContentFilterEngine
 
     public var policy: EnforcementPolicy {
         get {
@@ -27,9 +29,34 @@ public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Senda
         }
     }
 
-    public init(policy: EnforcementPolicy = .lockedDown) {
+    public init(
+        policy: EnforcementPolicy = .lockedDown,
+        statusReader: (any FilterEnforcementStatusReading)? = nil
+    ) {
         self._policy = policy
+        self.engine = ContentFilterEngine(statusReader: statusReader, fallbackPolicy: policy)
         super.init()
+    }
+
+    public func currentSnapshot() -> FilterEnforcementSnapshot {
+        var engine = engine
+        lock.lock()
+        engine.fallbackPolicy = _policy
+        lock.unlock()
+        return engine.currentSnapshot()
+    }
+
+    /// Evaluates a flow against the live daemon snapshot (or the local policy).
+    public func verdict(
+        hostname: String?,
+        port: UInt16?,
+        transport: TransportProtocol
+    ) -> FilterVerdict {
+        var engine = engine
+        lock.lock()
+        engine.fallbackPolicy = _policy
+        lock.unlock()
+        return engine.verdict(hostname: hostname, port: port, transport: transport)
     }
 
     override public func startFilter(completionHandler: @escaping (Error?) -> Void) {
@@ -49,13 +76,9 @@ public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Senda
         }
 
         let transport = Self.transport(from: socketFlow.socketProtocol)
-        let currentPolicy = policy
         let port = Self.remotePort(from: socketFlow)
         let hostname = Self.hostname(from: socketFlow)
-
-        return Self.mapVerdict(
-            currentPolicy.flowVerdict(hostname: hostname, port: port, transport: transport)
-        )
+        return Self.mapVerdict(verdict(hostname: hostname, port: port, transport: transport))
     }
 
     /// Pure decision helper used by unit tests without constructing socket flows.
@@ -76,9 +99,27 @@ public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Senda
         hostname: String?,
         port: UInt16?,
         transport: TransportProtocol,
-        policy: EnforcementPolicy
+        policy: EnforcementPolicy,
+        passIsActive: Bool = false
     ) -> NEFilterNewFlowVerdict {
-        mapVerdict(policy.flowVerdict(hostname: hostname, port: port, transport: transport))
+        mapVerdict(
+            FilterFlowEvaluator(policy: policy, passIsActive: passIsActive).verdict(
+                for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
+            )
+        )
+    }
+
+    public static func networkVerdict(
+        hostname: String?,
+        port: UInt16?,
+        transport: TransportProtocol,
+        snapshot: FilterEnforcementSnapshot
+    ) -> NEFilterNewFlowVerdict {
+        mapVerdict(
+            FilterFlowEvaluator(snapshot: snapshot).verdict(
+                for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
+            )
+        )
     }
 
     /// Maps core `FilterVerdict` values onto Network Extension verdicts.

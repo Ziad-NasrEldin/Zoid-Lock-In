@@ -1,7 +1,6 @@
 import Foundation
 import NetworkExtension
 import ZoidLockInCore
-import ZoidLockInIPC
 
 /// Host-side activator that configures `NEFilterManager` for the filter sysex.
 ///
@@ -13,11 +12,11 @@ import ZoidLockInIPC
 /// is unavailable on macOS).
 public struct ContentFilterActivation: Sendable {
     public static let dataProviderBundleIdentifier =
-        ZoidLockInIPCIdentity.filterDataProviderBundleIdentifier
+        ZoidLockInIdentity.filterDataProviderBundleIdentifier
     public static let controlProviderBundleIdentifier =
-        ZoidLockInIPCIdentity.filterControlProviderBundleIdentifier
+        ZoidLockInIdentity.filterControlProviderBundleIdentifier
     public static let systemExtensionBundleIdentifier =
-        ZoidLockInIPCIdentity.filterSystemExtensionBundleIdentifier
+        ZoidLockInIdentity.filterSystemExtensionBundleIdentifier
 
     public init() {}
 

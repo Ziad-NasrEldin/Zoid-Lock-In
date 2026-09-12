@@ -169,7 +169,9 @@ public struct XPCAuditTokenGatekeeper: Sendable {
         guard auditToken.count == AuditTokenExtraction.expectedByteCount else {
             return .reject(.missingAuditToken)
         }
-        guard CodeRequirement.isTeamIDPinned(requirementString) else {
+        guard CodeRequirement.sanitizedTeamIdentifier(teamID) != nil,
+              CodeRequirement.sanitizedCodeIdentifier(identifier) != nil,
+              CodeRequirement.isTeamIDPinned(requirementString) else {
             return .reject(.requirementStringUnsafe)
         }
 

@@ -6,8 +6,23 @@ public protocol MonotonicTimeProviding: Sendable {
     func nowSeconds() -> TimeInterval
 }
 
-/// `mach_absolute_time` / `CLOCK_UPTIME_RAW` clock. Pauses while the system is asleep.
-public struct MachAbsoluteTimeClock: MonotonicTimeProviding {
+/// Continuous monotonic clock (`CLOCK_MONOTONIC_RAW` / `mach_continuous_time`).
+///
+/// Advances while the system is asleep so a 30-minute pass cannot be extended
+/// by closing a laptop lid. Does not track NTP or the wall clock.
+public struct MachContinuousTimeClock: MonotonicTimeProviding {
+    public init() {}
+
+    public func nowSeconds() -> TimeInterval {
+        TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
+    }
+}
+
+/// Backwards-compatible name. Pass expiry uses continuous time, not uptime.
+public typealias MachAbsoluteTimeClock = MachContinuousTimeClock
+
+/// Uptime clock that **pauses during sleep**. Must not be used for pass expiry.
+public struct MachUptimeClock: MonotonicTimeProviding {
     public init() {}
 
     public func nowSeconds() -> TimeInterval {
@@ -43,6 +58,50 @@ public final class ManualMonotonicClock: MonotonicTimeProviding, @unchecked Send
     }
 }
 
+/// Test clock that distinguishes sleep (uptime frozen, continuous advancing).
+///
+/// `nowSeconds()` returns continuous time, matching `MachContinuousTimeClock`.
+public final class SleepSimulationClock: MonotonicTimeProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private var uptimeSeconds: TimeInterval
+    private var continuousSeconds: TimeInterval
+
+    public init(startingAt seconds: TimeInterval = 0) {
+        self.uptimeSeconds = seconds
+        self.continuousSeconds = seconds
+    }
+
+    public func nowSeconds() -> TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return continuousSeconds
+    }
+
+    public func uptimeNowSeconds() -> TimeInterval {
+        lock.lock()
+        defer { lock.unlock() }
+        return uptimeSeconds
+    }
+
+    public func continuousNowSeconds() -> TimeInterval {
+        nowSeconds()
+    }
+
+    public func advanceAwake(by delta: TimeInterval) {
+        lock.lock()
+        uptimeSeconds += delta
+        continuousSeconds += delta
+        lock.unlock()
+    }
+
+    /// System sleep: continuous time keeps moving; uptime does not.
+    public func simulateSleep(for duration: TimeInterval) {
+        lock.lock()
+        continuousSeconds += duration
+        lock.unlock()
+    }
+}
+
 /// Wall clock used only for human-readable incident timestamps, never for expiry.
 public protocol WallClockProviding: Sendable {
     func now() -> Date
@@ -65,5 +124,25 @@ public struct FixedWallClock: WallClockProviding, Sendable {
 
     public func now() -> Date {
         date
+    }
+}
+
+/// Boot-session identity. Persisted passes (never used) and cooldown restoration
+/// compare this UUID so a reboot cannot resurrect a previous boot's monotonic timestamps.
+public enum BootSession: Sendable {
+    public static func currentUUID() -> String {
+        var size = 0
+        guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 1 else {
+            return "unknown"
+        }
+
+        var buffer = [CChar](repeating: 0, count: size)
+        guard sysctlbyname("kern.bootsessionuuid", &buffer, &size, nil, 0) == 0 else {
+            return "unknown"
+        }
+        return buffer.withUnsafeBufferPointer { pointer in
+            guard let base = pointer.baseAddress else { return "unknown" }
+            return String(cString: base)
+        }
     }
 }
