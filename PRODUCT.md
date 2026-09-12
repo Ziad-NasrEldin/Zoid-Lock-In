@@ -1,10 +1,14 @@
-# Product Specification: Zoid 0 Life Credit Exchange ("The Trading Center")
+# Product Specification: Zoid Lock In ("The Trading Center")
 
 ## 1. System Vision & Behavioral Philosophy
 
-The **Zoid 0 Life Credit Exchange** (internally known as **The Trading Center**) is an uncompromising, local-first personal economy system engineered to permanently eliminate procrastination, eradicate digital distraction, and enforce daily high-output discipline.
+The **Zoid Lock In** application (featuring **The Trading Center**) is an uncompromising, standalone local-first personal economy system engineered to permanently eliminate procrastination, eradicate digital distraction, and enforce daily high-output discipline.
 
-### 1.1. Core Axioms
+### 1.1. Product Lineage & Scope
+- **Independent Standalone Product:** Zoid Lock In is an entirely separate, standalone application with its own dedicated lifecycle and codebase, rather than a feature branch or submodule of Zoid 0.
+- **Integrated Zoid 0 Technology:** While architecturally independent, Zoid Lock In directly integrates and builds upon the proven time-tracking engines, duration counters, workspace observation logic, and session timer mechanisms pioneered in Zoid 0. It connects those precise measurement primitives directly to credit minting and hard system lockdowns.
+
+### 1.2. Core Axioms
 1. **Zero-Baseline Daily Reset:** Every sunrise begins at **0 credits**. Past victories do not fund today's idleness.
 2. **Artificial Scarcity:** Amenities, entertainment, non-essential screen time, food delivery, and basic living comforts must be actively purchased with earned credits.
 3. **Hard Digital Enforcement:** Distractions are blocked at the operating system and network level by default. Willpower is replaced by automated system barriers.
@@ -187,13 +191,17 @@ To ensure sustainability and prevent psychological rejection of the system:
 
 ---
 
-## 9. Zoid 0 Architecture Integration Map
+## 9. System Architecture & Zoid 0 Integration Map
 
-- **Host App:** [Zoid 0](file:///Users/ziadnasreldin/Work/GitHub/Zoid%200) (Native macOS, Swift 6, SwiftUI).
+- **Standalone Platform:** Native macOS desktop application (Swift 6, SwiftUI) packaged and versioned independently as **Zoid Lock In**.
 - **Design Standard:** **SUMI-E Ink** visual aesthetic (paper/ink tones, restrained seal-red accents, serif headers).
-- **Component Additions:**
+- **Integrated Zoid 0 Technology:**
+  1. *Screenwatch & Session Tracker:* Adopts Zoid 0's native workspace session tracking and application-level duration measurement primitives to verify deep work without manual timesheets.
+  2. *Meeting Infrastructure:* Adopts Zoid 0's meeting verification logic for offline work logging and proof attachment.
+- **Dedicated Zoid Lock In Modules:**
   1. `TradingCenterView`: Live wallet balance, active lock statuses, catalog grid, and purchase triggers.
-  2. `EnforcementDaemon`: Background observer managing process killing and network shield state.
+  2. `EnforcementDaemon`: Background observer managing process termination and domain shield enforcement.
   3. `OfflineSessionCoordinator`: Punch-in/out timer with evidence file dropzone.
-  4. `SecurityGatekeeper`: Password hashing, TOTP verification engine, and SMTP/API email dispatcher.
-  5. `ShortcutBridge`: URL scheme / local listener syncing state with Apple Shortcuts.
+  4. `SecurityGatekeeper`: Password hashing, Google Authenticator TOTP verification, and automated alert email dispatcher.
+  5. `CooldownManager`: Enforces the 48-hour configuration rate-limit lockout with development/testing bypass toggles.
+  6. `ShortcutBridge`: System-level webhook and Apple Shortcuts sync for cross-device Focus Mode engagement.
