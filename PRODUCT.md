@@ -101,13 +101,13 @@ Distractions are disabled on macOS and paired iOS devices by default.
 
 ### 3.1. Desktop Process Lockdown (Privileged Helper Daemon)
 - **Target Applications:** Steam, Discord, Battle.net, Epic Games Launcher, Riot Client, and standalone gaming executables.
-- **Daemon Architecture:** Installed as a root-level Privileged Helper Daemon (`/Library/LaunchDaemons`) via macOS `SMJobBless` / ServiceManagement.
-- **Tamper Defense & Aggressive Keep-Alive:** Configured with `KeepAlive: true`. If forcefully killed via Activity Monitor or Terminal, `launchd` respawns it within 500ms. If an ungraceful crash is detected, it automatically defaults to an immediate fail-closed state, engaging `pf` packet filtering and terminating unauthorized target processes until the core state verifies.
+- **Daemon Architecture:** Registered and managed via modern macOS `SMAppService.daemon(plistName:)` (macOS 13+).
+- **Tamper Defense & Aggressive Keep-Alive:** Configured with `KeepAlive: true`. If forcefully killed via Activity Monitor or Terminal, `launchd` respawns it within 500ms. If an ungraceful crash is detected, it automatically defaults to an immediate fail-closed state, engaging socket-level content filtering and terminating unauthorized target processes until the core state verifies.
 
-### 3.2. Web Domain & Network Lockdown
+### 3.2. Web Domain & Network Lockdown (Network Extension)
 - **Target Domains:** `youtube.com`, `reddit.com`, `facebook.com`, `instagram.com`, `x.com` (Twitter), `tiktok.com`, `twitch.tv`, `netflix.com`.
 - **Food Delivery Portals:** `talabat.com`, `ubereats.com`, `elmenus.com`, and related online food ordering websites.
-- **Mechanism:** System-level host/packet routing (`pf` Packet Filter) and local DNS interception across macOS (Mac Mini) and mobile. Blocked destinations render a clean Zoid Lock In "Access Locked: Spend Credits to Unlock" gateway.
+- **Mechanism:** Implements Apple's **Network Extension Framework (`NEFilterDataProvider`)** to inspect socket flows at the TLS SNI and HTTP Host layer across macOS (Mac Mini) and mobile, neutralizing VPN, CDN, and iCloud Private Relay bypasses. Blocked destinations render a clean Zoid Lock In "Access Locked: Spend Credits to Unlock" gateway.
 
 ### 3.3. Cross-Device Closure (Apple Shortcuts & iOS Focus Filter Window)
 - **Problem:** Desktop process locks cause subconscious redirection to mobile screens and mobile food ordering apps.

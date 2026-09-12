@@ -16,9 +16,9 @@ flowchart TD
         SyncManager["SyncManager (iCloud state.json + Push Relay)"]
     end
 
-    subgraph PrivilegedSpace ["Root Space (/Library/PrivilegedHelperTools)"]
-        Daemon["com.mavoid.zoidlockin.helper (LaunchDaemon)"]
-        PF["Packet Filter Engine (/sbin/pfctl Anchor)"]
+    subgraph PrivilegedSpace ["Root Space (/Library/PrivilegedHelperTools & Network Extension)"]
+        Daemon["com.mavoid.zoidlockin.helper (LaunchDaemon via SMAppService)"]
+        NetExt["Content Filter (NEFilterDataProvider)"]
         ProcKiller["Process Sentinel (kill / SIGSTOP / SIGKILL)"]
     end
 
@@ -29,8 +29,8 @@ flowchart TD
     Engine --> MailClient
     Engine --> SyncManager
 
-    Engine -- "Bi-directional Mach-O XPC (Audited Endpoint)" --> Daemon
-    Daemon --> PF
+    Engine -- "Bi-directional Mach-O XPC (Audited via audit_token_t)" --> Daemon
+    Daemon --> NetExt
     Daemon --> ProcKiller
 ```
 
@@ -39,11 +39,11 @@ flowchart TD
    - Renders the native SUMI-E Ink desktop command dashboard and the lightweight `MenuBarExtra` companion.
    - Houses the core business logic (`ExchangeEngine`), event dispatchers, and local SQLite database.
    - Manages network requests to the Gemini API, Resend transactional email API, and iCloud Drive file writes.
-2. **`com.mavoid.zoidlockin.helper` (Privileged Daemon):**
-   - Installed into `/Library/PrivilegedHelperTools` with a matching plist in `/Library/LaunchDaemons` using `SMJobBless`.
+2. **`com.mavoid.zoidlockin.helper` (Privileged Daemon & Network Extension):**
+   - Registered and managed via modern macOS `SMAppService.daemon(plistName:)` (macOS 13+ standard).
    - Runs with root (`uid 0`) permissions, configured with `KeepAlive: true`.
-   - Owns the Packet Filter anchor (`com.mavoid.zoidlockin.pf`) and low-level process termination primitives.
-   - Communicates with `ZoidLockInApp` exclusively through a sandboxed Mach-O XPC listener validating process code-signing requirements.
+   - Utilizes Apple's **Network Extension Framework (`NEFilterDataProvider`)** for socket-level domain filtering, evaluating Server Name Indication (SNI) and HTTP Host headers to block domains reliably across CDNs, IP rotations, and VPNs / iCloud Private Relay.
+   - Communicates with `ZoidLockInApp` exclusively through a sandboxed Mach-O XPC listener validating client identity using `audit_token_t` and `SecCodeCheckValidity` against a hardcoded requirement string (`identifier "com.mavoid.zoidlockin" and anchor apple generic`).
 
 ---
 
@@ -51,6 +51,7 @@ flowchart TD
 
 ### 2.1. `ExchangeEngine` (The Primary Testing & Domain Seam)
 - **Role:** Pure, deterministic coordinator that consumes timestamped domain events and yields new system states.
+- **Anti-Time-Travel Architecture:** Does not trust raw mutable local clock time. Combines hardware monotonic timing (`mach_absolute_time()`) for elapsed duration calculations with an authenticated remote NTP baseline check queried upon startup. If local system time skews more than 120 seconds from the NTP anchor, the engine locks credit transactions and logs a Clock Tamper Incident.
 - **Responsibilities:**
   - Maintains in-memory wallet balances, debt tracking, and active temporary amenity passes.
   - Evaluates focus duration milestones (+1.0/hr, +0.5/30min).
@@ -60,15 +61,17 @@ flowchart TD
   - Reconciles midnight expiration, surplus vault accruals, and streak calculations.
   - Enforces the 22:00 curfew and permanent Friday rest rules.
 
-### 2.2. `WorkspaceObserver` (Time Tracking Engine)
+### 2.2. `WorkspaceObserver` (Time Tracking & Anti-Idle Engine)
 - **Engine Heritage:** Ported directly from Zoid 0's native workspace session tracking.
 - **Mechanism:** Listens to `NSWorkspace.didActivateApplicationNotification` and window focus transitions via Apple ScreenCaptureKit and Accessibility APIs.
-- **Classification:** Whitelisted productive tools (IDEs, terminals, design software, local documents) feed focus ticks into the `ExchangeEngine`. Non-whitelisted apps or screensaver states trigger an interruption timer.
+- **Anti-Idle Human Input Detection:** Taps system event stream (`CGEvent.tapCreate` / IOHIDEventSystem) to monitor physical keyboard and mouse activity frequencies. If zero user input events occur for 5 consecutive minutes (even if a whitelisted IDE is frontmost), the session automatically pauses and enters the 300-second grace window, preventing mouse jiggler and script-based farming.
+- **Classification:** Whitelisted productive tools feed focus ticks into the `ExchangeEngine`. Non-whitelisted apps, screensaver activation, or lock screens trigger an interruption timer.
 
-### 2.3. `GeminiAuditService` (Multimodal AI Auditor)
+### 2.3. `GeminiAuditService` (Multimodal AI Auditor & Sanitizer)
 - **Engine:** REST client targeting Google Generative AI (`gemini-1.5-flash` for initial audits; `gemini-1.5-pro` for formal appeals).
 - **Security:** API key retrieved at runtime from macOS Keychain (`kSecClassGenericPassword`, service `com.mavoid.zoidlockin.gemini`).
-- **Payload Composition:** Sends base64-encoded receipt image, base64-encoded meeting photo, agenda text, start time, end time, and duration.
+- **Prompt Injection Defense:** Strips markdown tags, control characters, and known system-prompt override phrases from user agenda notes prior to injection into the LLM context.
+- **EXIF Metadata Gate:** Parses image binary EXIF headers locally before network dispatch. Requires genuine capture timestamps matching the logged meeting interval and verifies Apple camera lens/device signatures.
 - **Verification Rule:** Expects strict structured JSON output defining `decision` (`APPROVED` or `REJECTED`), `confidenceScore` (0.0 to 1.0), and `auditNotes`.
 - **Appeal Gate:** Increments local failure count. Only permits secondary arbitration when consecutive failures reach 3.
 
@@ -78,17 +81,16 @@ flowchart TD
 - **Email Dispatch:** Sends immediate psychological warning alerts via Resend API (`api.resend.com/emails`) on successful admin authentication.
 - **48-Hour Lockout:** Checks `last_config_mutation_epoch`. Rejects mutation payloads unless `(now - last_config_mutation_epoch) >= 172800` seconds (bypassed in debug builds via compiler directive).
 
-### 2.5. `EnforcementDaemon` & `PacketFilterController`
-- **Anchor Name:** `com.mavoid.zoidlockin.pf`.
-- **Packet Filter Rules:**
-  - Block rules redirect outbound traffic on ports 80/443 for target domain IP ranges to `127.0.0.1:8999` (a local lightweight daemon socket that renders the locked splash screen).
+### 2.5. `EnforcementDaemon` & `ContentFilterController`
+- **Network Extension Provider:** Implements Apple's `NEFilterDataProvider`.
+- **Filtering Mechanism:** Inspects outbound TCP/UDP flows at the socket layer. Reads Server Name Indication (SNI) on TLS handshakes and HTTP Host headers to block target domains (YouTube, Reddit, social networks, and food delivery portals like Talabat and Uber Eats) independent of IP rotation, CDN proxies, or VPN tunnels.
 - **Process Sentinel:**
   - Scans system process tables every 1.5 seconds.
   - If a target binary signature (Steam, Discord, Battle.net, Epic Games) is detected without an active authorized pass, dispatches `SIGSTOP` followed by `SIGKILL` to prevent execution.
-- **Fail-Closed Guarantee:** If communication with `ZoidLockInApp` is lost for more than 5 seconds, the daemon automatically reapplies full lockdown rules.
+- **Fail-Closed & Auto-Respawn:** Registered with `KeepAlive: true`. If communication with `ZoidLockInApp` is lost for more than 5 seconds, the daemon automatically reapplies full lockdown rules.
 
 ### 2.6. `SyncManager` (Cross-Device Mobile Shield)
-- **Local Storage:** Writes encrypted JSON (`state.json`) to the ubiquitous iCloud Container folder (`iCloud~com~mavoid~zoidlockin`).
+- **Local Storage:** Writes encrypted JSON (`state.json`) with monotonic versioning and Last-Write-Wins timestamps to the ubiquitous iCloud Container folder (`iCloud~com~mavoid~zoidlockin`).
 - **Relay Dispatch:** Fires HTTP POST webhook to a Cloudflare Worker that publishes Apple Push Notification service (APNs) silent background payloads to registered iOS devices.
 - **iOS Automation:** Personal Automation in iOS Shortcuts receives the payload and toggles the dedicated "Lock In" Focus Filter, restricting mobile applications for the duration of the pass.
 
@@ -272,24 +274,29 @@ The communication interface between `ZoidLockInApp` and the privileged helper da
   - `queryEnforcementStatus(withReply: (EnforcementState) -> Void)`
   - `engageEmergencySafetyValve(withReply: (Bool) -> Void)`
 
-### 5.2. Packet Filter Anchor Configuration
-The daemon generates and loads the anchor rule into `/etc/pf.anchors/com.mavoid.zoidlockin`:
+### 5.2. Network Extension Content Filter Configuration
+The daemon configures and manages the system content filter via `NEFilterManager`:
 
-- **Rule Syntax Pattern:**
-  - `anchor "com.mavoid.zoidlockin/*"`
-  - `table <blocked_domains> persist { ... IP blocks ... }`
-  - `rdr pass on lo0 proto tcp from any to <blocked_domains> port {80, 443} -> 127.0.0.1 port 8999`
-  - `block return out quick on en0 proto tcp to <blocked_domains>`
+- **Filter Provider:** Subclass of `NEFilterDataProvider`.
+- **Interception Scope:** Subscribes to all outbound TCP flows targeting ports 80 and 443.
+- **Rule Resolution Logic:**
+  - Extracts hostname from `NEFilterSocketFlow.remoteHostname` or parses SNI TLS extension.
+  - Compares against blacklisted suffix trie (`youtube.com`, `reddit.com`, `facebook.com`, `instagram.com`, `x.com`, `tiktok.com`, `talabat.com`, `ubereats.com`, `elmenus.com`).
+  - If match found and no active pass token is verified in local shared cache, returns `NEFilterDataVerdict.drop()`.
+  - If active pass token is valid, returns `NEFilterDataVerdict.allow()`.
 
 ---
 
-## 6. Verification Gates & Implementation Roadmap
+## 6. Verification Gates & Hardened 9-Slice Implementation Roadmap
 
-| Phase | Milestone | Deliverable | Verification Gate |
+| Slice | Milestone | Deliverable | Verification Gate |
 | :--- | :--- | :--- | :--- |
-| **Phase 1** | Core Economic Seam | `ExchangeEngine` + SQLite Store | 100% test pass on wallet reset, 2.0x morning multiplier, 5m grace, debts, curfew, Friday mode |
-| **Phase 2** | Privileged Daemon | Root `LaunchDaemon` + `pfctl` wrapper | Process kill verified on Steam/Discord; domain block verified on YouTube/Talabat |
-| **Phase 3** | Dual Surface UI | Menu Bar Extra + SUMI-E Ink Window | Menu bar ticker displays live balance; window renders catalog, ledger, and timers |
-| **Phase 4** | Multimodal AI Audit | Gemini Client + Appeal Arbitration | Mock offline photo/receipt passes audit; 3-failure trigger unlocks Gemini Pro appeal |
-| **Phase 5** | Governance & Sync | 2FA + Resend Mail + iCloud Relay | TOTP verified; alert email received; iOS Shortcut Focus Filter toggled on pass purchase |
-| **Phase 6** | Hardening & Calibration | 3-Day Soft Mode -> Hard Lock | Zero crash on daemon restarts; 500ms keep-alive fail-closed behavior verified |
+| **Slice 1** | Network Extension & Enforcer Prototype | `SMAppService` Root Daemon + `NEFilterDataProvider` | Zero economic logic. Process termination verified on test target; domain blocking verified at socket layer against VPN/Private Relay. |
+| **Slice 2** | XPC Gatekeeper & Emergency Valve | Secure Mach-O XPC with `audit_token_t` + 2FA Gate | Authenticated pause command reliably unblocks network extension for 30 minutes; incident audit event logged. |
+| **Slice 3** | Core Economic Ledger & Menu Bar Ticker | `ExchangeEngine` (NTP clock sync, idle detection, 2.0x morning bonus, 5m grace, debts, curfew, Friday rest) + SQLite + Menu Bar | 100% test pass on deterministic state transitions; live credit counter ticks up in macOS Menu Bar. |
+| **Slice 4** | Marketplace & Enforcer Integration | Marketplace Purchase Coordinator | Spending 1.5 credits unblocks the Network Extension for 30 minutes; pass auto-expires and re-locks socket traffic. |
+| **Slice 5** | Cross-Device Mobile Shield | iCloud Drive `state.json` + Cloudflare Push Relay | Last-Write-Wins conflict resolution; iOS Focus Filter toggled on iPhone when pass purchased on Mac. |
+| **Slice 6** | Offline Meeting Core (Local) | Local Meeting Dropzone & SQLite Store | File storage, SHA-256 digests, and local EXIF camera/timestamp validation verified before network dispatch. |
+| **Slice 7** | Multimodal AI Audit Integration | Gemini Flash Client + Sanitizer + Gemini Pro Arbitration | Prompt injection stripped; mock photo/receipt verified; 3-rejection threshold escalates to Gemini Pro arbitration. |
+| **Slice 8** | Customizable Micro-Habits & Governance | Micro-Habit CRUD + 48-Hour Cooldown | Frequency limits enforced; 1.5 credit/day cap verified; 48-hour edit lockout active with debug override. |
+| **Slice 9** | SUMI-E Ink Desktop Dashboard & Calibration | Standalone Command Dashboard | Full SUMI-E Ink interface; 3-day soft calibration warning banner active; full hard lockdown engaged on Day 4. |

@@ -85,12 +85,14 @@ The user needs an uncompromising, local-first personal economy system that intro
 ### 1. Architectural Topology & Modularity
 - **Process Model:** Zoid Lock In operates as a dual-tier architecture:
   - **Tier 1 (User UI Process):** Native Swift 6 / SwiftUI application hosting the `MenuBarExtra` companion item, the main SUMI-E Ink dashboard window, and the local SQLite state coordinator.
-  - **Tier 2 (Privileged Helper Daemon):** A root-level `LaunchDaemon` registered via macOS ServiceManagement (`SMJobBless`), communicating with the user process over secure, bi-directional Mach-O XPC.
-- **Fail-Closed Daemon Authority:** The helper daemon manages low-level `kill` signal dispatch and manipulates `/sbin/pfctl` packet-filter anchor rules (`com.mavoid.zoidlockin.pf`). It runs with `KeepAlive: true` and defaults to blocking all target processes and domains if communication with the UI process is severed.
+  - **Tier 2 (Privileged Helper Daemon & Network Extension):** A root-level daemon registered via modern macOS `SMAppService.daemon(plistName:)`, hosting Apple's **Network Extension Content Filter (`NEFilterDataProvider`)** to intercept socket flows by hostname/SNI, neutralizing VPN and Private Relay bypasses.
+- **Fail-Closed Daemon Authority:** The helper daemon terminates unauthorized processes (`SIGKILL`), enforces socket-level drops, and communicates with the UI process via Mach-O XPC audited via `audit_token_t`. It runs with `KeepAlive: true` and defaults to locking target applications if communication is severed.
 
 ### 2. Time-Tracking & Workspace Observation Engine
 - **Engine Adaptation from Zoid 0:** Incorporates the application-level activation observer and ScreenCaptureKit pipeline from Zoid 0. It monitors active frontmost applications and window focus, maintaining a continuous active-task clock.
-- **Grace Window Logic:** Tracks an `interruptionStartTimestamp`. If an interruption (computer sleep, lock screen, non-whitelisted app activation) resolves within 300 seconds, the session state transitions back to `activeFocus` without resetting the elapsed block timer. If interruption duration exceeds 300 seconds, the block resets to zero.
+- **Anti-Idle Human Input Detection:** Taps system event streams (`CGEvent.tapCreate` / IOHIDEventSystem) to require physical keyboard and mouse activity. 5 minutes of zero physical inputs immediately triggers the grace period countdown, preventing mouse-jiggler farming.
+- **Monotonic Clock & NTP Anti-Tamper:** Combines `mach_absolute_time()` with an encrypted startup NTP baseline check to prevent clock-skewing in macOS System Settings.
+- **Grace Window Logic:** Tracks an `interruptionStartTimestamp`. If an interruption resolves within 300 seconds, the session state transitions back to `activeFocus` without resetting the elapsed block timer. If interruption duration exceeds 300 seconds, the block resets to zero.
 
 ### 3. Economic State Machine & Ledger
 - **Deterministic Event-Driven Engine:** All credit adjustments flow through an append-only transaction ledger (`WalletTransaction`).
@@ -104,6 +106,7 @@ The user needs an uncompromising, local-first personal economy system that intro
 ### 4. Triple-Gate Offline Meeting & Gemini AI Pipeline
 - **Punch-In / Punch-Out Coordinator:** Records local monotonic timestamps for offline sessions.
 - **Evidence Bundle Packaging:** Requires 3 attached payloads: Markdown agenda note, JPEG/PNG receipt document, and JPEG/PNG contextual photo.
+- **EXIF Verification & Prompt Sanitization:** Validates local image EXIF metadata (capture timestamps, camera signatures) before dispatch and strips prompt-injection patterns from agenda notes.
 - **Gemini Multimodal Client:** Sends the bundled artifacts to Gemini API using a system prompt that cross-examines document dates, visual room clues, and duration reasonableness.
 - **Appeal Pipeline:** Counts consecutive denials in SQLite (`denialCount`). When `denialCount == 3`, an "Appeal to Gemini Pro" action unlocks, routing the package and user statement through Gemini Pro for final binding arbitration.
 - **Storage Lifecycle:** Original image binaries are removed from disk 30 days after creation; SHA-256 digests and audit logs remain permanently in SQLite.
@@ -115,7 +118,7 @@ The user needs an uncompromising, local-first personal economy system that intro
 - **48-Hour Cooldown Controller:** Records `lastConfigChangeTimestamp` in SQLite. All write interfaces in settings check `(now - lastConfigChangeTimestamp) >= 172800` seconds. In debug builds, a pre-production bypass flag overrides this check.
 
 ### 6. Mobile Synchronization & Network Shield
-- **iCloud Drive Channel:** Writes an encrypted JSON payload (`state.json`) containing `{ focusActive: Bool, activePass: String?, passExpiry: ISO8601String? }` into the app's ubiquitous container.
+- **iCloud Drive Channel:** Writes an encrypted JSON payload (`state.json`) with Last-Write-Wins timestamps into the app's ubiquitous container.
 - **Webhook Relay:** Dispatches state changes to a Cloudflare Worker that forwards push notifications to iOS Shortcuts.
 - **iOS Shortcut Focus Filter Window:** Triggers an iOS automation that adjusts iOS Focus Mode filters for 30 minutes when a Food Pass or Phone Pass is active.
 
