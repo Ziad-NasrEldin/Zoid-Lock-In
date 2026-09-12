@@ -12,8 +12,16 @@ let package = Package(
             targets: ["ZoidLockInCore"]
         ),
         .library(
+            name: "ZoidLockInIPC",
+            targets: ["ZoidLockInIPC"]
+        ),
+        .library(
             name: "ZoidLockInEnforcer",
             targets: ["ZoidLockInEnforcer"]
+        ),
+        .library(
+            name: "ZoidLockInFilterExtension",
+            targets: ["ZoidLockInFilterExtension"]
         ),
         .executable(
             name: "ZoidLockInDaemon",
@@ -26,13 +34,28 @@ let package = Package(
             path: "Sources/ZoidLockInCore"
         ),
         .target(
+            name: "ZoidLockInIPC",
+            dependencies: ["ZoidLockInCore"],
+            path: "Sources/ZoidLockInIPC"
+        ),
+        .target(
             name: "ZoidLockInEnforcer",
             dependencies: ["ZoidLockInCore"],
             path: "Sources/ZoidLockInEnforcer",
             linkerSettings: [
+                .linkedFramework("ServiceManagement"),
+            ]
+        ),
+        // Network System Extension provider. Must not be a dependency of
+        // ZoidLockInDaemon — LaunchDaemons cannot host NEFilterDataProvider.
+        .target(
+            name: "ZoidLockInFilterExtension",
+            dependencies: ["ZoidLockInCore", "ZoidLockInIPC"],
+            path: "Sources/ZoidLockInFilterExtension",
+            exclude: ["Resources"],
+            linkerSettings: [
                 .linkedFramework("Network"),
                 .linkedFramework("NetworkExtension"),
-                .linkedFramework("ServiceManagement"),
             ]
         ),
         .executableTarget(
@@ -42,7 +65,12 @@ let package = Package(
         ),
         .testTarget(
             name: "ZoidLockInTests",
-            dependencies: ["ZoidLockInCore", "ZoidLockInEnforcer"],
+            dependencies: [
+                "ZoidLockInCore",
+                "ZoidLockInEnforcer",
+                "ZoidLockInFilterExtension",
+                "ZoidLockInIPC",
+            ],
             path: "Tests/ZoidLockInTests"
         ),
     ]

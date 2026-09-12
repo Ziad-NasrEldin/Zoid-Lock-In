@@ -5,6 +5,9 @@ import Foundation
 /// Hostnames are compared case-insensitively against configured blacklisted and
 /// whitelisted suffixes. Whitelist entries take precedence so temporary amenity
 /// passes can unblock specific destinations without disabling the full shield.
+///
+/// Missing, empty, or IP-literal hostnames are **unverified**. Callers that
+/// invoke this matcher for inspected ports must treat `.drop` as fail-closed.
 public struct DomainFilterRules: Sendable, Equatable {
     public let blacklistedSuffixes: [String]
     public let whitelistedSuffixes: [String]
@@ -35,18 +38,18 @@ public struct DomainFilterRules: Sendable, Equatable {
     }
 
     /// Evaluates an outbound hostname and returns allow or drop.
+    ///
+    /// Unverified identities (nil, empty, trailing-dot-only, IP literals) drop.
     public func verdict(forHostname hostname: String?) -> FilterVerdict {
-        guard let hostname, !hostname.isEmpty else {
+        guard let hostname = Self.verifiedHostname(hostname) else {
+            return .drop
+        }
+
+        if matches(hostname, against: whitelistedSuffixes) {
             return .allow
         }
 
-        let normalized = Self.normalize(hostname)
-
-        if matches(normalized, against: whitelistedSuffixes) {
-            return .allow
-        }
-
-        if matches(normalized, against: blacklistedSuffixes) {
+        if matches(hostname, against: blacklistedSuffixes) {
             return .drop
         }
 
@@ -65,19 +68,60 @@ public struct DomainFilterRules: Sendable, Equatable {
         )
     }
 
+    /// Normalized hostname if it is a usable DNS name; otherwise nil (unverified).
+    public static func verifiedHostname(_ hostname: String?) -> String? {
+        guard let hostname else { return nil }
+
+        let normalized = normalize(hostname)
+        guard !normalized.isEmpty else { return nil }
+        if isIPLiteral(normalized) { return nil }
+        return normalized
+    }
+
     private func matches(_ hostname: String, against suffixes: [String]) -> Bool {
         suffixes.contains { suffix in
             hostname == suffix || hostname.hasSuffix("." + suffix)
         }
     }
 
-    private static func normalize(_ value: String) -> String {
+    static func normalize(_ value: String) -> String {
         var normalized = value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()
         while normalized.hasPrefix(".") {
             normalized.removeFirst()
         }
+        while normalized.hasSuffix(".") {
+            normalized.removeLast()
+        }
         return normalized
+    }
+
+    private static func isIPLiteral(_ value: String) -> Bool {
+        let host: String
+        if value.hasPrefix("["), value.hasSuffix("]"), value.count > 2 {
+            host = String(value.dropFirst().dropLast())
+        } else {
+            host = value
+        }
+
+        if isIPv4Literal(host) {
+            return true
+        }
+
+        return host.contains(":")
+    }
+
+    private static func isIPv4Literal(_ value: String) -> Bool {
+        let parts = value.split(separator: ".", omittingEmptySubsequences: false)
+        guard parts.count == 4 else { return false }
+
+        return parts.allSatisfy { part in
+            let text = String(part)
+            guard let octet = UInt8(text), String(octet) == text else {
+                return false
+            }
+            return true
+        }
     }
 }

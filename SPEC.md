@@ -2,7 +2,7 @@
 
 ## 1. System Topology & Process Architecture
 
-Zoid Lock In is architected as a native macOS local-first application built in Swift 6. It separates untrusted user interface rendering from privileged root-level security enforcement via a dual-process model:
+Zoid Lock In is architected as a native macOS local-first application built in Swift 6. It separates untrusted user interface rendering from privileged root-level security enforcement via a **three-process** model. A LaunchDaemon cannot host `NEFilterDataProvider`; the content filter is a Network **System Extension**.
 
 ```mermaid
 flowchart TD
@@ -14,12 +14,14 @@ flowchart TD
         GeminiClient["GeminiAuditService (Keychain Key + REST Client)"]
         MailClient["AlertMailService (Resend API)"]
         SyncManager["SyncManager (iCloud state.json + Push Relay)"]
+        FilterActivator["ContentFilterActivation (NEFilterManager)"]
     end
 
-    subgraph PrivilegedSpace ["Root Space (/Library/PrivilegedHelperTools & Network Extension)"]
+    subgraph PrivilegedSpace ["Privileged Space"]
         Daemon["com.mavoid.zoidlockin.helper (LaunchDaemon via SMAppService)"]
-        NetExt["Content Filter (NEFilterDataProvider)"]
-        ProcKiller["Process Sentinel (kill / SIGSTOP / SIGKILL)"]
+        ProcKiller["Process Sentinel (SIGSTOP / SIGKILL / killpg)"]
+        NetExt["com.mavoid.zoidlockin.filter (Network System Extension)"]
+        FilterData["ContentFilterProvider (NEFilterDataProvider)"]
     end
 
     UI --> Engine
@@ -28,10 +30,12 @@ flowchart TD
     Engine --> GeminiClient
     Engine --> MailClient
     Engine --> SyncManager
+    UI --> FilterActivator
+    FilterActivator --> NetExt
 
-    Engine -- "Bi-directional Mach-O XPC (Audited via audit_token_t)" --> Daemon
-    Daemon --> NetExt
+    Engine -- "Bi-directional Mach-O XPC (Audited via audit_token_t, Slice 2)" --> Daemon
     Daemon --> ProcKiller
+    NetExt --> FilterData
 ```
 
 ### 1.1. Process Boundaries
@@ -39,11 +43,16 @@ flowchart TD
    - Renders the native SUMI-E Ink desktop command dashboard and the lightweight `MenuBarExtra` companion.
    - Houses the core business logic (`ExchangeEngine`), event dispatchers, and local SQLite database.
    - Manages network requests to the Gemini API, Resend transactional email API, and iCloud Drive file writes.
-2. **`com.mavoid.zoidlockin.helper` (Privileged Daemon & Network Extension):**
+   - Activates the Network System Extension via `NEFilterManager` (`ContentFilterActivation`).
+2. **`com.mavoid.zoidlockin.helper` (Privileged LaunchDaemon):**
    - Registered and managed via modern macOS `SMAppService.daemon(plistName:)` (macOS 13+ standard).
-   - Runs with root (`uid 0`) permissions, configured with `KeepAlive: true`.
-   - Utilizes Apple's **Network Extension Framework (`NEFilterDataProvider`)** for socket-level domain filtering, evaluating Server Name Indication (SNI) and HTTP Host headers to block domains reliably across CDNs, IP rotations, and VPNs / iCloud Private Relay.
-   - Communicates with `ZoidLockInApp` exclusively through a sandboxed Mach-O XPC listener validating client identity using `audit_token_t` and `SecCodeCheckValidity` against a hardcoded requirement string (`identifier "com.mavoid.zoidlockin" and anchor apple generic`).
+   - Runs with root (`uid 0`) permissions, configured with `KeepAlive: true` and `ThrottleInterval: 1`.
+   - Runs the process sentinel (`proc_pidpath` matching + `killpg`). Does **not** host the content filter.
+   - Communicates with `ZoidLockInApp` exclusively through a sandboxed Mach-O XPC listener (Slice 2) validating client identity using `audit_token_t` and `SecCodeCheckValidity` against a Team-ID-pinned requirement (`anchor apple generic and certificate leaf[subject.OU] = TEAMID and identifier "com.mavoid.zoidlockin"`). `MachServices` is omitted until that validation ships.
+3. **`com.mavoid.zoidlockin.filter` (Network System Extension):**
+   - Separate bundle from the LaunchDaemon. Principal class: `ContentFilterProvider` (`NEFilterDataProvider`).
+   - Inspects outbound **TCP and UDP** socket flows on ports 80, 443, 8080, and 1080.
+   - Fail-closes (drops) inspected flows whose hostname is nil, empty, or an IP literal so Chrome/Electron/QUIC cannot bypass by omitting metadata.
 
 ---
 
@@ -81,13 +90,14 @@ flowchart TD
 - **Email Dispatch:** Sends immediate psychological warning alerts via Resend API (`api.resend.com/emails`) on successful admin authentication.
 - **48-Hour Lockout:** Checks `last_config_mutation_epoch`. Rejects mutation payloads unless `(now - last_config_mutation_epoch) >= 172800` seconds (bypassed in debug builds via compiler directive).
 
-### 2.5. `EnforcementDaemon` & `ContentFilterController`
-- **Network Extension Provider:** Implements Apple's `NEFilterDataProvider`.
-- **Filtering Mechanism:** Inspects outbound TCP/UDP flows at the socket layer. Reads Server Name Indication (SNI) on TLS handshakes and HTTP Host headers to block target domains (YouTube, Reddit, social networks, and food delivery portals like Talabat and Uber Eats) independent of IP rotation, CDN proxies, or VPN tunnels.
+### 2.5. `EnforcementDaemon` & `ContentFilterProvider`
+- **Network System Extension Provider:** `ContentFilterProvider` (`NEFilterDataProvider`) lives in `com.mavoid.zoidlockin.filter`, not in the LaunchDaemon. The app enables it with `NEFilterManager`; on macOS 15+ it sets `disableEncryptedDNSSettings`.
+- **Filtering Mechanism:** Inspects outbound **TCP and UDP** flows on ports 80, 443, 8080, and 1080. UDP/443 (QUIC / HTTP/3) is fail-closed when the hostname is unverified and dropped when the hostname is blacklisted. Hostname matching uses Network Extension metadata plus suffix rules; missing identity on an inspected port is a drop, not an allow.
 - **Process Sentinel:**
   - Scans system process tables every 1.5 seconds.
-  - If a target binary signature (Steam, Discord, Battle.net, Epic Games) is detected without an active authorized pass, dispatches `SIGSTOP` followed by `SIGKILL` to prevent execution.
-- **Fail-Closed & Auto-Respawn:** Registered with `KeepAlive: true`. If communication with `ZoidLockInApp` is lost for more than 5 seconds, the daemon automatically reapplies full lockdown rules.
+  - Matches `proc_name` and `proc_pidpath` against launchers, helpers (`steamwebhelper`, Discord Canary/PTB), and Wine/GPTK wrappers.
+  - If a target is detected without an active authorized pass, dispatches `SIGSTOP` followed by `SIGKILL` to the process and `killpg` to its process group so child game processes die with the launcher.
+- **Fail-Closed & Auto-Respawn:** Registered with `KeepAlive: true` and `ThrottleInterval: 1`. If communication with `ZoidLockInApp` is lost for more than 5 seconds (Slice 2 heartbeat), the daemon automatically reapplies full lockdown rules.
 
 ### 2.6. `SyncManager` (Cross-Device Mobile Shield)
 - **Local Storage:** Writes encrypted JSON (`state.json`) with monotonic versioning and Last-Write-Wins timestamps to the ubiquitous iCloud Container folder (`iCloud~com~mavoid~zoidlockin`).
@@ -275,15 +285,16 @@ The communication interface between `ZoidLockInApp` and the privileged helper da
   - `engageEmergencySafetyValve(withReply: (Bool) -> Void)`
 
 ### 5.2. Network Extension Content Filter Configuration
-The daemon configures and manages the system content filter via `NEFilterManager`:
+The **unprivileged app** configures the system content filter via `NEFilterManager`. The provider runs in `com.mavoid.zoidlockin.filter`.
 
-- **Filter Provider:** Subclass of `NEFilterDataProvider`.
-- **Interception Scope:** Subscribes to all outbound TCP flows targeting ports 80 and 443.
+- **Filter Provider:** `ContentFilterProvider`, subclass of `NEFilterDataProvider`, packaged as a Network System Extension (`content-filter-provider-systemextension`).
+- **Interception Scope:** Outbound TCP **and UDP** flows targeting ports 80, 443, 8080, and 1080. UDP/443 is inspected so HTTP/3 cannot skip the filter.
 - **Rule Resolution Logic:**
-  - Extracts hostname from `NEFilterSocketFlow.remoteHostname` or parses SNI TLS extension.
-  - Compares against blacklisted suffix trie (`youtube.com`, `reddit.com`, `facebook.com`, `instagram.com`, `x.com`, `tiktok.com`, `talabat.com`, `ubereats.com`, `elmenus.com`).
-  - If match found and no active pass token is verified in local shared cache, returns `NEFilterDataVerdict.drop()`.
-  - If active pass token is valid, returns `NEFilterDataVerdict.allow()`.
+  - Extracts hostname from `NEFilterSocketFlow.remoteHostname` or `flow.url` (WebKit / Network.framework metadata). Hostnames are normalized (case-insensitive, leading/trailing dots stripped). IP literals are unverified.
+  - On inspected ports, **nil / empty / unverified hostnames fail closed** (`drop`).
+  - Compares verified hostnames against blacklisted suffixes (`youtube.com`, `reddit.com`, `facebook.com`, `instagram.com`, `x.com`, `tiktok.com`, `talabat.com`, `ubereats.com`, `elmenus.com`, …).
+  - If match found and no active pass token is verified in the privileged cache, returns `NEFilterNewFlowVerdict.drop()`.
+  - If active pass token is valid, returns `NEFilterNewFlowVerdict.allow()`.
 
 ---
 

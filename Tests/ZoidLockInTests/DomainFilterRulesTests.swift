@@ -59,16 +59,28 @@ struct DomainFilterRulesTests {
         #expect(passRules.verdict(forHostname: "reddit.com") == .drop)
     }
 
-    @Test("treats hostnames case-insensitively and ignores leading dots")
+    @Test("treats hostnames case-insensitively and strips leading and trailing dots")
     func normalizesHostnames() {
         #expect(rules.verdict(forHostname: "YouTube.COM") == .drop)
         #expect(rules.verdict(forHostname: ".x.com") == .drop)
         #expect(rules.verdict(forHostname: "  Twitter.Com ") == .drop)
+        #expect(rules.verdict(forHostname: "youtube.com.") == .drop)
+        #expect(rules.verdict(forHostname: "www.youtube.com.") == .drop)
+        #expect(rules.verdict(forHostname: "youtube.com...") == .drop)
     }
 
-    @Test("allows nil or empty hostnames")
-    func allowsMissingHostnames() {
-        #expect(rules.verdict(forHostname: nil) == .allow)
-        #expect(rules.verdict(forHostname: "") == .allow)
+    @Test("drops nil, empty, or IP-literal hostnames (fail-closed)")
+    func dropsUnverifiedHostnames() {
+        #expect(rules.verdict(forHostname: nil) == .drop)
+        #expect(rules.verdict(forHostname: "") == .drop)
+        #expect(rules.verdict(forHostname: ".") == .drop)
+        #expect(rules.verdict(forHostname: "   ") == .drop)
+        #expect(rules.verdict(forHostname: "142.250.72.14") == .drop)
+        #expect(rules.verdict(forHostname: "2001:4860:4860::8888") == .drop)
+        #expect(rules.verdict(forHostname: "[2001:4860:4860::8888]") == .drop)
+        #expect(DomainFilterRules.verifiedHostname(nil) == nil)
+        #expect(DomainFilterRules.verifiedHostname("") == nil)
+        #expect(DomainFilterRules.verifiedHostname("8.8.8.8") == nil)
+        #expect(DomainFilterRules.verifiedHostname("youtube.com.") == "youtube.com")
     }
 }

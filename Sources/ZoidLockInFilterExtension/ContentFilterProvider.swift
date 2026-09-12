@@ -1,13 +1,16 @@
+import Darwin
 import Foundation
 import Network
 import NetworkExtension
 import ZoidLockInCore
 
-/// Prototype `NEFilterDataProvider` that drops outbound TCP flows to blacklisted domains.
+/// System-extension `NEFilterDataProvider` that drops outbound TCP and UDP flows
+/// to blacklisted domains.
 ///
-/// Slice 1 inspects ports 80/443 and resolves hostnames from the socket flow's
-/// remote hostname (SNI / DNS metadata exposed by the Network Extension stack).
-open class ContentFilterProvider: NEFilterDataProvider, @unchecked Sendable {
+/// This class is the Network Extension **principal class**. It must not be
+/// hosted in the LaunchDaemon. Slice 2 talks to the daemon over XPC; the
+/// daemon never instantiates this type.
+public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var _policy: EnforcementPolicy
 
@@ -29,40 +32,29 @@ open class ContentFilterProvider: NEFilterDataProvider, @unchecked Sendable {
         super.init()
     }
 
-    override open func startFilter(completionHandler: @escaping (Error?) -> Void) {
+    override public func startFilter(completionHandler: @escaping (Error?) -> Void) {
         completionHandler(nil)
     }
 
-    override open func stopFilter(
+    override public func stopFilter(
         with reason: NEProviderStopReason,
         completionHandler: @escaping () -> Void
     ) {
         completionHandler()
     }
 
-    override open func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
+    override public func handleNewFlow(_ flow: NEFilterFlow) -> NEFilterNewFlowVerdict {
         guard let socketFlow = flow as? NEFilterSocketFlow else {
             return .allow()
         }
 
-        // Only enforce on TCP socket flows.
-        guard socketFlow.socketProtocol == IPPROTO_TCP else {
-            return .allow()
-        }
-
+        let transport = Self.transport(from: socketFlow.socketProtocol)
         let currentPolicy = policy
         let port = Self.remotePort(from: socketFlow)
-
-        // When the remote port is known, only inspect HTTP/HTTPS.
-        // When unavailable at handleNewFlow time, still evaluate hostname (fail-closed).
-        if let port, !currentPolicy.shouldInspect(port: port) {
-            return .allow()
-        }
-
         let hostname = Self.hostname(from: socketFlow)
-        return Self.networkVerdict(
-            forHostname: hostname,
-            rules: currentPolicy.domainRules
+
+        return Self.mapVerdict(
+            currentPolicy.flowVerdict(hostname: hostname, port: port, transport: transport)
         )
     }
 
@@ -71,7 +63,22 @@ open class ContentFilterProvider: NEFilterDataProvider, @unchecked Sendable {
         forHostname hostname: String?,
         rules: DomainFilterRules
     ) -> NEFilterNewFlowVerdict {
-        mapVerdict(rules.verdict(forHostname: hostname))
+        let policy = EnforcementPolicy(domainRules: rules)
+        return networkVerdict(
+            hostname: hostname,
+            port: 443,
+            transport: .tcp,
+            policy: policy
+        )
+    }
+
+    public static func networkVerdict(
+        hostname: String?,
+        port: UInt16?,
+        transport: TransportProtocol,
+        policy: EnforcementPolicy
+    ) -> NEFilterNewFlowVerdict {
+        mapVerdict(policy.flowVerdict(hostname: hostname, port: port, transport: transport))
     }
 
     /// Maps core `FilterVerdict` values onto Network Extension verdicts.
@@ -81,6 +88,17 @@ open class ContentFilterProvider: NEFilterDataProvider, @unchecked Sendable {
             return .allow()
         case .drop:
             return .drop()
+        }
+    }
+
+    public static func transport(from socketProtocol: Int32) -> TransportProtocol {
+        switch socketProtocol {
+        case IPPROTO_TCP:
+            return .tcp
+        case IPPROTO_UDP:
+            return .udp
+        default:
+            return .other
         }
     }
 

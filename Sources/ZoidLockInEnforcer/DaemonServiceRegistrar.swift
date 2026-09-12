@@ -61,7 +61,10 @@ public enum DaemonRegistrationError: Error, Equatable, LocalizedError {
     }
 }
 
-/// Privileged enforcement daemon lifecycle coordinator (Slice 1 prototype).
+    /// Privileged enforcement daemon lifecycle coordinator (Slice 1 prototype).
+    ///
+    /// Owns the process sentinel. Does **not** instantiate `ContentFilterProvider`;
+    /// that type lives in `ZoidLockInFilterExtension`.
 public final class EnforcementDaemon: @unchecked Sendable {
     public let configuration: DaemonConfiguration
     public let registrar: DaemonServiceRegistrar
@@ -95,11 +98,12 @@ public final class EnforcementDaemon: @unchecked Sendable {
         lock.lock()
         self.policy = policy
         lock.unlock()
-        processSentinel.updateMatcher(policy.processMatcher)
+        processSentinel.apply(policy)
     }
 
-    /// Starts background enforcement loops. Network Extension activation is owned
-    /// by the system after the content filter is installed; this starts the process sentinel.
+    /// Starts the process sentinel. Network Extension activation is owned by the
+    /// unprivileged app via `ContentFilterActivation`; this daemon never hosts
+    /// `NEFilterDataProvider`.
     public func start() {
         lock.lock()
         defer { lock.unlock() }

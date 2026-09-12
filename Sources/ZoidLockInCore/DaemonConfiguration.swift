@@ -1,26 +1,33 @@
 import Foundation
 
 /// LaunchDaemon configuration for registration via `SMAppService.daemon(plistName:)`.
+///
+/// The plist must be packaged at `App.app/Contents/Library/LaunchDaemons/<plistName>`.
+/// `ThrottleInterval` is 1 second so `KeepAlive` is not the launchd default of 10s.
 public struct DaemonConfiguration: Sendable, Equatable {
-    public static let label = "com.mavoid.zoidlockin.helper"
-    public static let plistFileName = "com.mavoid.zoidlockin.helper.plist"
+    public static let label = ZoidLockInIdentity.daemonLabel
+    public static let plistFileName = ZoidLockInIdentity.daemonPlistFileName
     public static let bundleProgram = "Contents/MacOS/ZoidLockInDaemon"
+    public static let defaultThrottleInterval = 1
 
     public let label: String
     public let bundleProgram: String
     public let keepAlive: Bool
     public let runAtLoad: Bool
+    public let throttleInterval: Int
 
     public init(
         label: String = DaemonConfiguration.label,
         bundleProgram: String = DaemonConfiguration.bundleProgram,
         keepAlive: Bool = true,
-        runAtLoad: Bool = true
+        runAtLoad: Bool = true,
+        throttleInterval: Int = DaemonConfiguration.defaultThrottleInterval
     ) {
         self.label = label
         self.bundleProgram = bundleProgram
         self.keepAlive = keepAlive
         self.runAtLoad = runAtLoad
+        self.throttleInterval = throttleInterval
     }
 
     /// Property-list dictionary suitable for `SMAppService.daemon` packaging.
@@ -30,6 +37,7 @@ public struct DaemonConfiguration: Sendable, Equatable {
             "BundleProgram": bundleProgram,
             "KeepAlive": keepAlive,
             "RunAtLoad": runAtLoad,
+            "ThrottleInterval": throttleInterval,
         ]
     }
 
@@ -51,6 +59,8 @@ public struct DaemonConfiguration: Sendable, Equatable {
         \t<\(keepAliveValue)/>
         \t<key>RunAtLoad</key>
         \t<\(runAtLoadValue)/>
+        \t<key>ThrottleInterval</key>
+        \t<integer>\(throttleInterval)</integer>
         </dict>
         </plist>
         """
@@ -71,6 +81,9 @@ public struct DaemonConfiguration: Sendable, Equatable {
         }
         if !keepAlive {
             issues.append("KeepAlive must be true for fail-closed daemon respawn")
+        }
+        if throttleInterval != 1 {
+            issues.append("ThrottleInterval must be 1 second so KeepAlive is not launchd's 10s default")
         }
 
         return issues
