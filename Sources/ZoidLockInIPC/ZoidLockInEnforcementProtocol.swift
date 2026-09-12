@@ -52,14 +52,6 @@ public struct EnforcementPolicySnapshot: Sendable, Equatable, Codable {
     }
 }
 
-public enum PassKind: String, Sendable, Equatable, Codable {
-    case food
-    case phone
-    case streaming
-    case gaming
-    case emergency
-}
-
 public struct EnforcementStatus: Sendable, Equatable, Codable {
     public var mode: EnforcementMode
     public var isLockedDown: Bool
@@ -81,9 +73,8 @@ public struct EnforcementStatus: Sendable, Equatable, Codable {
 
 /// Slice 2 XPC seam. The LaunchDaemon implements this; the filter sysex does not.
 ///
-/// NSXPC mapping must pin Team ID via `ZoidLockInIdentity.xpcClientRequirementTemplate`.
-/// `MachServices` must be added to the LaunchDaemon plist in the same change that
-/// installs `audit_token_t` validation — never before.
+/// NSXPC mapping pins Team ID via `ZoidLockInIdentity.xpcClientRequirement(teamID:)`.
+/// `MachServices` is advertised because `audit_token_t` validation ships with this slice.
 public protocol ZoidLockInEnforcementServicing: Sendable {
     func applyPolicy(_ snapshot: EnforcementPolicySnapshot) async throws
     func openPass(kind: PassKind, durationSeconds: Int, nonce: String) async throws

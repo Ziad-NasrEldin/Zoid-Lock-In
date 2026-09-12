@@ -4,30 +4,38 @@ import Foundation
 ///
 /// The plist must be packaged at `App.app/Contents/Library/LaunchDaemons/<plistName>`.
 /// `ThrottleInterval` is 1 second so `KeepAlive` is not the launchd default of 10s.
+/// `MachServices` advertises the enforcement Mach service because `audit_token_t`
+/// gatekeeping ships with Slice 2.
 public struct DaemonConfiguration: Sendable, Equatable {
     public static let label = ZoidLockInIdentity.daemonLabel
     public static let plistFileName = ZoidLockInIdentity.daemonPlistFileName
     public static let bundleProgram = "Contents/MacOS/ZoidLockInDaemon"
     public static let defaultThrottleInterval = 1
+    public static let defaultMachServices: [String: Bool] = [
+        ZoidLockInIdentity.enforcementMachServiceName: true,
+    ]
 
     public let label: String
     public let bundleProgram: String
     public let keepAlive: Bool
     public let runAtLoad: Bool
     public let throttleInterval: Int
+    public let machServices: [String: Bool]
 
     public init(
         label: String = DaemonConfiguration.label,
         bundleProgram: String = DaemonConfiguration.bundleProgram,
         keepAlive: Bool = true,
         runAtLoad: Bool = true,
-        throttleInterval: Int = DaemonConfiguration.defaultThrottleInterval
+        throttleInterval: Int = DaemonConfiguration.defaultThrottleInterval,
+        machServices: [String: Bool] = DaemonConfiguration.defaultMachServices
     ) {
         self.label = label
         self.bundleProgram = bundleProgram
         self.keepAlive = keepAlive
         self.runAtLoad = runAtLoad
         self.throttleInterval = throttleInterval
+        self.machServices = machServices
     }
 
     /// Property-list dictionary suitable for `SMAppService.daemon` packaging.
@@ -38,6 +46,7 @@ public struct DaemonConfiguration: Sendable, Equatable {
             "KeepAlive": keepAlive,
             "RunAtLoad": runAtLoad,
             "ThrottleInterval": throttleInterval,
+            "MachServices": machServices,
         ]
     }
 
@@ -45,6 +54,10 @@ public struct DaemonConfiguration: Sendable, Equatable {
     public func propertyListXML() -> String {
         let keepAliveValue = keepAlive ? "true" : "false"
         let runAtLoadValue = runAtLoad ? "true" : "false"
+        let machServiceLines = machServices.keys.sorted().map { key in
+            let value = machServices[key] == true ? "true" : "false"
+            return "\t\t<key>\(key)</key>\n\t\t<\(value)/>"
+        }.joined(separator: "\n")
 
         return """
         <?xml version="1.0" encoding="UTF-8"?>
@@ -61,6 +74,10 @@ public struct DaemonConfiguration: Sendable, Equatable {
         \t<\(runAtLoadValue)/>
         \t<key>ThrottleInterval</key>
         \t<integer>\(throttleInterval)</integer>
+        \t<key>MachServices</key>
+        \t<dict>
+        \(machServiceLines)
+        \t</dict>
         </dict>
         </plist>
         """
@@ -84,6 +101,11 @@ public struct DaemonConfiguration: Sendable, Equatable {
         }
         if throttleInterval != 1 {
             issues.append("ThrottleInterval must be 1 second so KeepAlive is not launchd's 10s default")
+        }
+        if machServices[ZoidLockInIdentity.enforcementMachServiceName] != true {
+            issues.append(
+                "MachServices must enable \(ZoidLockInIdentity.enforcementMachServiceName)"
+            )
         }
 
         return issues

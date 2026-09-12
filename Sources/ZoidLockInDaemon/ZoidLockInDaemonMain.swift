@@ -1,12 +1,13 @@
 import Foundation
 import ZoidLockInCore
 import ZoidLockInEnforcer
+import ZoidLockInIPC
 
 /// Privileged LaunchDaemon entrypoint.
 ///
 /// Does not import `ZoidLockInFilterExtension`. The content filter lives in the
 /// `com.mavoid.zoidlockin.filter` system extension; this process only runs the
-/// process sentinel and, in Slice 2, the authenticated XPC listener.
+/// process sentinel and the authenticated XPC listener.
 @main
 struct ZoidLockInDaemonMain {
     static func main() {
@@ -15,10 +16,11 @@ struct ZoidLockInDaemonMain {
         // Fail-closed: apply full lockdown immediately on boot / respawn.
         daemon.applyPolicy(.lockedDown)
         daemon.start()
+        daemon.startMachServiceListener()
 
         FileHandle.standardError.write(
             Data(
-                "[ZoidLockInDaemon] \(DaemonConfiguration.label) started (KeepAlive + ThrottleInterval=1)\n"
+                "[ZoidLockInDaemon] \(DaemonConfiguration.label) started (KeepAlive + ThrottleInterval=1, MachService=\(ZoidLockInIdentity.enforcementMachServiceName))\n"
                     .utf8
             )
         )

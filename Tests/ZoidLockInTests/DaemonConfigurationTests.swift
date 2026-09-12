@@ -14,9 +14,10 @@ struct DaemonConfigurationTests {
         #expect(config.label == "com.mavoid.zoidlockin.helper")
         #expect(config.bundleProgram == "Contents/MacOS/ZoidLockInDaemon")
         #expect(config.label == ZoidLockInIdentity.daemonLabel)
+        #expect(config.machServices[ZoidLockInIdentity.enforcementMachServiceName] == true)
     }
 
-    @Test("property list contains required LaunchDaemon keys including ThrottleInterval")
+    @Test("property list contains MachServices alongside ThrottleInterval and KeepAlive")
     func propertyListContainsRequiredKeys() {
         let plist = DaemonConfiguration().propertyList
 
@@ -25,10 +26,12 @@ struct DaemonConfigurationTests {
         #expect(plist["KeepAlive"] as? Bool == true)
         #expect(plist["RunAtLoad"] as? Bool == true)
         #expect(plist["ThrottleInterval"] as? Int == 1)
-        #expect(plist["MachServices"] == nil)
+
+        let machServices = plist["MachServices"] as? [String: Bool]
+        #expect(machServices?[ZoidLockInIdentity.enforcementMachServiceName] == true)
     }
 
-    @Test("generated XML plist serializes KeepAlive true and ThrottleInterval 1")
+    @Test("generated XML plist serializes KeepAlive, ThrottleInterval, and MachServices")
     func generatedXMLContainsKeepAlive() throws {
         let xml = DaemonConfiguration().propertyListXML()
         let data = try #require(xml.data(using: .utf8))
@@ -46,6 +49,11 @@ struct DaemonConfigurationTests {
         #expect(dictionary["ThrottleInterval"] as? Int == 1)
         #expect(xml.contains("<key>ThrottleInterval</key>"))
         #expect(xml.contains("<integer>1</integer>"))
+        #expect(xml.contains("<key>MachServices</key>"))
+        #expect(xml.contains("<key>com.mavoid.zoidlockin.enforcement</key>"))
+
+        let machServices = try #require(dictionary["MachServices"] as? [String: Any])
+        #expect(machServices["com.mavoid.zoidlockin.enforcement"] as? Bool == true)
     }
 
     @Test("bundled Resources plist matches SMAppService expectations")
@@ -73,7 +81,9 @@ struct DaemonConfigurationTests {
         #expect(dictionary["BundleProgram"] as? String == "Contents/MacOS/ZoidLockInDaemon")
         #expect(dictionary["RunAtLoad"] as? Bool == true)
         #expect(dictionary["ThrottleInterval"] as? Int == 1)
-        #expect(dictionary["MachServices"] == nil)
+
+        let machServices = try #require(dictionary["MachServices"] as? [String: Any])
+        #expect(machServices["com.mavoid.zoidlockin.enforcement"] as? Bool == true)
     }
 
     @Test("EnforcementDaemon exposes the same LaunchDaemon plist payload")
@@ -82,6 +92,9 @@ struct DaemonConfigurationTests {
         #expect(daemon.launchDaemonPropertyList["KeepAlive"] as? Bool == true)
         #expect(daemon.launchDaemonPropertyList["ThrottleInterval"] as? Int == 1)
         #expect(daemon.configuration.isValid)
+
+        let machServices = daemon.launchDaemonPropertyList["MachServices"] as? [String: Bool]
+        #expect(machServices?[ZoidLockInIdentity.enforcementMachServiceName] == true)
 
         let registrar = DaemonServiceRegistrar()
         #expect(throws: Never.self) {
@@ -98,5 +111,16 @@ struct DaemonConfigurationTests {
         #expect(throws: DaemonRegistrationError.self) {
             try registrar.validateForRegistration()
         }
+    }
+
+    @Test("configuration without the enforcement Mach service is invalid")
+    func rejectsMissingMachServices() {
+        let invalid = DaemonConfiguration(machServices: [:])
+        #expect(!invalid.isValid)
+        #expect(
+            invalid.validate().contains {
+                $0.contains("MachServices")
+            }
+        )
     }
 }

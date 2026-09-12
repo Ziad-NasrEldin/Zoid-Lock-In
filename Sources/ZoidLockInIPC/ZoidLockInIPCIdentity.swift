@@ -13,4 +13,12 @@ public enum ZoidLockInIPCIdentity {
         ZoidLockInIdentity.filterControlProviderBundleIdentifier
     public static let enforcementMachServiceName = ZoidLockInIdentity.enforcementMachServiceName
     public static let xpcClientRequirementTemplate = ZoidLockInIdentity.xpcClientRequirementTemplate
+
+    public static func xpcClientRequirement(teamID: String) -> String {
+        ZoidLockInIdentity.xpcClientRequirement(teamID: teamID)
+    }
+
+    public static func xpcDaemonRequirement(teamID: String) -> String {
+        ZoidLockInIdentity.xpcDaemonRequirement(teamID: teamID)
+    }
 }

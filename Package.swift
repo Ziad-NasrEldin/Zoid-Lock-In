@@ -31,19 +31,26 @@ let package = Package(
     targets: [
         .target(
             name: "ZoidLockInCore",
-            path: "Sources/ZoidLockInCore"
+            path: "Sources/ZoidLockInCore",
+            linkerSettings: [
+                .linkedFramework("Security"),
+            ]
         ),
         .target(
             name: "ZoidLockInIPC",
             dependencies: ["ZoidLockInCore"],
-            path: "Sources/ZoidLockInIPC"
+            path: "Sources/ZoidLockInIPC",
+            linkerSettings: [
+                .linkedFramework("Security"),
+            ]
         ),
         .target(
             name: "ZoidLockInEnforcer",
-            dependencies: ["ZoidLockInCore"],
+            dependencies: ["ZoidLockInCore", "ZoidLockInIPC"],
             path: "Sources/ZoidLockInEnforcer",
             linkerSettings: [
                 .linkedFramework("ServiceManagement"),
+                .linkedFramework("Security"),
             ]
         ),
         // Network System Extension provider. Must not be a dependency of
@@ -60,7 +67,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "ZoidLockInDaemon",
-            dependencies: ["ZoidLockInCore", "ZoidLockInEnforcer"],
+            dependencies: ["ZoidLockInCore", "ZoidLockInEnforcer", "ZoidLockInIPC"],
             path: "Sources/ZoidLockInDaemon"
         ),
         .testTarget(

@@ -48,7 +48,7 @@ flowchart TD
    - Registered and managed via modern macOS `SMAppService.daemon(plistName:)` (macOS 13+ standard).
    - Runs with root (`uid 0`) permissions, configured with `KeepAlive: true` and `ThrottleInterval: 1`.
    - Runs the process sentinel (`proc_pidpath` matching + `killpg`). Does **not** host the content filter.
-   - Communicates with `ZoidLockInApp` exclusively through a sandboxed Mach-O XPC listener (Slice 2) validating client identity using `audit_token_t` and `SecCodeCheckValidity` against a Team-ID-pinned requirement (`anchor apple generic and certificate leaf[subject.OU] = TEAMID and identifier "com.mavoid.zoidlockin"`). `MachServices` is omitted until that validation ships.
+   - Communicates with `ZoidLockInApp` exclusively through a sandboxed Mach-O XPC listener validating client identity using `audit_token_t` and `SecCodeCheckValidity` against a Team-ID-pinned requirement (`anchor apple generic and certificate leaf[subject.OU] = TEAMID and identifier "com.mavoid.zoidlockin"`). `MachServices` advertises `com.mavoid.zoidlockin.enforcement` together with that validation.
 3. **`com.mavoid.zoidlockin.filter` (Network System Extension):**
    - Separate bundle from the LaunchDaemon. Principal class: `ContentFilterProvider` (`NEFilterDataProvider`).
    - Inspects outbound **TCP and UDP** socket flows on ports 80, 443, 8080, and 1080.

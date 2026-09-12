@@ -12,5 +12,10 @@
 	<true/>
 	<key>ThrottleInterval</key>
 	<integer>1</integer>
+	<key>MachServices</key>
+	<dict>
+		<key>com.mavoid.zoidlockin.enforcement</key>
+		<true/>
+	</dict>
 </dict>
 </plist>

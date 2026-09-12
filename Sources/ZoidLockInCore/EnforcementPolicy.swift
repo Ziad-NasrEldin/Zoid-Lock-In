@@ -33,6 +33,17 @@ public struct EnforcementPolicy: Sendable, Equatable {
 
     public static let lockedDown = EnforcementPolicy()
 
+    /// Emergency / amenity overlay: whitelist every blacklisted suffix and pause kills.
+    public func relaxingForActivePass() -> EnforcementPolicy {
+        EnforcementPolicy(
+            domainRules: domainRules.withWhitelist(domainRules.blacklistedSuffixes),
+            processMatcher: processMatcher,
+            processScanIntervalSeconds: processScanIntervalSeconds,
+            inspectedPorts: inspectedPorts,
+            mode: .soft
+        )
+    }
+
     /// True for HTTP, HTTPS, HTTP/3 (UDP/443), and common local proxy ports.
     public func shouldInspect(port: UInt16) -> Bool {
         inspectedPorts.contains(port)
