@@ -6,7 +6,8 @@ Zoid Lock In eliminates procrastination through artificial scarcity, daily midni
 
 ## Core Features
 - **Daily Credit Economy:** Starts at 0 credits every morning. Verified deep work earns credits required to unlock entertainment, leisure, food delivery, and basic comforts.
-- **The 90-Minute Momentum Rule:** Completing the day's first continuous 90-minute focus block awards a 1.5x momentum bonus.
+- **The 90-Minute Momentum Rule:** Completing the day's first continuous 90-minute focus block applies a 2.0x multiplier to morning work.
+- **Customizable Micro-Habits:** Flexible daily discipline routines (e.g., brushing teeth for +0.25 credits) managed via the dashboard.
 - **Dual-Gate Offline Meeting Verification:** Real-time punch-in/out timers plus mandatory supporting evidence (agenda, receipt, photo).
 - **Hard Digital Lockdown:** Blocks Steam, Discord, game launchers, YouTube, Reddit, and social media domains by default.
 - **Cross-Device Shield:** Integrated with Apple Shortcuts and Focus Modes to silence mobile distractions.

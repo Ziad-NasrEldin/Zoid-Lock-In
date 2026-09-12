@@ -22,10 +22,12 @@ flowchart TD
     
     WorkSession["Standard Deep Work (Zoid 0 Auto-Track)"] --> RegularEarn["+1.0 Credit / Hour (0.5 / 30 min)"]
     OfflineMeeting["Offline Meeting (Punch-In/Out + Mandatory Evidence)"] --> MeetingEarn["Verified Duration Converted to Credits"]
+    MicroTasks["Custom Micro-Tasks (e.g., Brushing Teeth = +0.25)"] --> MicroEarn["Instant Milestone Addition"]
     
     MomentumBonus --> DailyWallet["Active Daily Wallet"]
     RegularEarn --> DailyWallet
     MeetingEarn --> DailyWallet
+    MicroEarn --> DailyWallet
     
     DailyWallet --> Buy["Purchase Amenities (Before 22:00 Curfew)"]
     Buy --> TimedUnlock["Temporary Hard Unlock Window"]
@@ -58,6 +60,21 @@ For professional commitments occurring off-screen (in-person client meetings, ph
      2. **Physical / Digital Documentation:** Formal receipt, invoice, signed memo, or calendar invite.
      3. **Contextual Photo:** Physical timestamped photo of the meeting location or environment.
 - **Resolution:** Once both gates are fulfilled, duration is credited directly to the active daily balance.
+
+### 2.4. Customizable Micro-Habits & Daily Discipline Tasks
+To incentivize essential personal hygiene, wellness, and baseline discipline routines:
+- **Concept:** Quick, non-work habits that anchor the day award small fractional credits (e.g., +0.25 credits).
+- **Customization Engine:** The user can add, edit, value-scale, and toggle tasks directly via the 2FA Admin Dashboard.
+- **Representative Catalog:**
+  | Micro-Task | Reward Value | Daily Frequency Limit |
+  | :--- | :--- | :--- |
+  | **Brushing Teeth / Dental Routine** | +0.25 Credits | Max 2 / Day (Morning & Night) |
+  | **Making Bed / Room Reset** | +0.25 Credits | Max 1 / Day |
+  | **Daily Hydration Goal (2L Water)** | +0.25 Credits | Max 1 / Day |
+  | **Physical Movement / Stretching (15m)** | +0.50 Credits | Max 1 / Day |
+- **Anti-Exploitation Safeguards:**
+  - Strict daily frequency caps per task prevent credit spamming.
+  - Overall micro-habit earnings are capped at a maximum of **1.5 credits total per day**, ensuring that the remaining core credits must be produced through genuine deep work.
 
 ---
 
