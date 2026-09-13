@@ -10,6 +10,31 @@ public enum ExchangeEngineError: Error, Equatable, Sendable {
     case alreadyReconciled
 }
 
+extension ExchangeEngineError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .clockTampered(let skew):
+            return "Clock tamper lock: wall clock diverged from the monotonic baseline by \(Int(skew.rounded(.up)))s."
+        case .focusAlreadyActive:
+            return "A focus session is already active"
+        case .noActiveFocus:
+            return "No active focus session"
+        case .sessionAbandoned:
+            return "The focus session was abandoned after the grace window"
+        case .insufficientCredits(let need, let have):
+            return String(
+                format: "Insufficient balance: %0.1f credits available, %0.1f required.",
+                have,
+                need
+            )
+        case .curfew:
+            return "Curfew is active (22:00–03:59). Entertainment and food amenity purchases are locked."
+        case .alreadyReconciled:
+            return "That local day has already been reconciled"
+        }
+    }
+}
+
 /// Deterministic daily economy. All minting, grace, curfew, Friday rest,
 /// midnight reconciliation, and emergency netting converge here.
 public final class ExchangeEngine: @unchecked Sendable {
@@ -141,6 +166,16 @@ public final class ExchangeEngine: @unchecked Sendable {
 
     @discardableResult
     public func purchase(_ kind: AmenityKind) throws -> WalletTransaction {
+        try purchaseAmenity(kind).transaction
+    }
+
+    /// Debits the ledger with `BEGIN IMMEDIATE` and, for enforced amenities,
+    /// mints an HMAC voucher bound to the posted transaction id.
+    @discardableResult
+    public func purchaseAmenity(
+        _ kind: AmenityKind,
+        issuer: AmenityVoucherIssuer = AmenityVoucherIssuer()
+    ) throws -> AmenityPurchase {
         try withLock {
             try observeClocksLocked()
             try ensureWritableLocked()
@@ -170,7 +205,27 @@ public final class ExchangeEngine: @unchecked Sendable {
                     description: purchaseDescription(kind, cost: cost, fridayRestMode: friday)
                 )
                 try ledger.appendTransaction(transaction)
-                return transaction
+
+                let duration = catalog.durationSeconds(of: kind)
+                let voucher: AmenityPassVoucher?
+                if let passKind = kind.passKind, let duration {
+                    voucher = issuer.issue(
+                        kind: passKind,
+                        durationSeconds: duration,
+                        nonce: UUID().uuidString,
+                        transactionID: transaction.id
+                    )
+                } else {
+                    voucher = nil
+                }
+
+                return AmenityPurchase(
+                    kind: kind,
+                    transaction: transaction,
+                    cost: cost,
+                    voucher: voucher,
+                    durationSeconds: duration
+                )
             }
         }
     }

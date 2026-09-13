@@ -10,6 +10,7 @@ public protocol ZoidLockInEnforcementXPC: NSObjectProtocol {
         nonce: String,
         withReply reply: @escaping (NSError?) -> Void
     )
+    func redeemAmenityVoucher(_ voucherJSON: Data, withReply reply: @escaping (NSError?) -> Void)
     func revokePassWithKind(_ kind: String, withReply reply: @escaping (NSError?) -> Void)
     func queryStatus(withReply reply: @escaping (Data?, NSError?) -> Void)
     func engageEmergencySafetyValve(withReply reply: @escaping (NSError?) -> Void)

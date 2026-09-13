@@ -109,7 +109,7 @@ public final class ProcessSentinel: @unchecked Sendable {
     private let lock = NSLock()
     private var matcher: ProcessTargetMatcher
     private var mode: EnforcementMode
-    private var activePassKind: PassKind?
+    private var activePassKinds: Set<PassKind> = []
     private var timer: DispatchSourceTimer?
     private var isRunning = false
 
@@ -144,16 +144,24 @@ public final class ProcessSentinel: @unchecked Sendable {
     }
 
     public func apply(_ policy: EnforcementPolicy, passKind: PassKind? = nil) {
+        apply(policy, passKinds: Set([passKind].compactMap { $0 }))
+    }
+
+    public func apply(_ policy: EnforcementPolicy, passKinds: Set<PassKind>) {
         lock.lock()
         matcher = policy.processMatcher
         mode = policy.mode
-        activePassKind = passKind
+        activePassKinds = passKinds
         lock.unlock()
     }
 
     public func updatePassKind(_ kind: PassKind?) {
+        updatePassKinds(Set([kind].compactMap { $0 }))
+    }
+
+    public func updatePassKinds(_ kinds: Set<PassKind>) {
         lock.lock()
-        activePassKind = kind
+        activePassKinds = kinds
         lock.unlock()
     }
 
@@ -195,7 +203,7 @@ public final class ProcessSentinel: @unchecked Sendable {
         lock.lock()
         let activeMatcher = matcher
         let activeMode = mode
-        let passKind = activePassKind
+        let passKinds = activePassKinds
         lock.unlock()
 
         let selfPid = getpid()
@@ -208,7 +216,7 @@ public final class ProcessSentinel: @unchecked Sendable {
                 )
         }
 
-        let relaxKills = passKind?.relaxesProcessTermination == true
+        let relaxKills = passKinds.contains { $0.relaxesProcessTermination }
         guard activeMode == .hard, !relaxKills else {
             lock.lock()
             scanCount += 1

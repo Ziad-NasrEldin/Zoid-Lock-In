@@ -92,6 +92,19 @@ public final class EnforcementXPCExporter: NSObject, ZoidLockInEnforcementXPC, @
         }
     }
 
+    public func redeemAmenityVoucher(_ voucherJSON: Data, withReply reply: @escaping (NSError?) -> Void) {
+        let reply = UncheckedSendableClosure(reply)
+        Task {
+            do {
+                let voucher = try JSONDecoder().decode(AmenityPassVoucher.self, from: voucherJSON)
+                try await service.redeemAmenityVoucher(voucher)
+                reply.call(nil)
+            } catch {
+                reply.call(error as NSError)
+            }
+        }
+    }
+
     public func revokePassWithKind(_ kind: String, withReply reply: @escaping (NSError?) -> Void) {
         let reply = UncheckedSendableClosure(reply)
         Task {

@@ -20,6 +20,7 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     public let filterPolicyHub: FilterPolicyHub
     public let incidentStore: any EmergencyIncidentStoring
     public let bootSessionUUID: String
+    public let voucherVerifier: AmenityVoucherVerifier
 
     private let filterStatusSink: (any FilterEnforcementStatusPublishing)?
     private let lock = NSLock()
@@ -47,7 +48,8 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         incidentStore: (any EmergencyIncidentStoring)? = nil,
         filterStatusSink: (any FilterEnforcementStatusPublishing)? = nil,
         bootSessionUUID: String = BootSession.currentUUID(),
-        storageDirectory: URL? = nil
+        storageDirectory: URL? = nil,
+        voucherVerifier: AmenityVoucherVerifier = AmenityVoucherVerifier()
     ) {
         let directory = storageDirectory ?? FileEmergencyIncidentStore.makeIsolatedDirectory()
         self.configuration = configuration
@@ -62,6 +64,7 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         self.incidentStore = incidentStore ?? FileEmergencyIncidentStore(directory: directory)
         self.filterStatusSink = filterStatusSink
         self.bootSessionUUID = bootSessionUUID
+        self.voucherVerifier = voucherVerifier
         self.processSentinel = processSentinel ?? ProcessSentinel(
             matcher: policy.processMatcher,
             scanInterval: policy.processScanIntervalSeconds,
@@ -100,14 +103,11 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
 
     /// Installs a kind-scoped daemon-local pass without voucher verification.
     /// Not an XPC entry; amenity `openPass` still throws `amenityPassRequiresVoucher`.
+    /// Concurrent kinds are stored independently and do not clobber each other.
     public func commitKindScopedPass(kind: PassKind, durationSeconds: TimeInterval) {
         let now = clock.nowSeconds()
         withLock {
-            passController.active = DaemonLocalPass(
-                kind: kind,
-                startedAtSeconds: now,
-                durationSeconds: durationSeconds
-            )
+            passController.install(kind: kind, durationSeconds: durationSeconds, at: now)
         }
         publishEffectivePolicy(at: now)
     }
@@ -143,12 +143,42 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         try await engageEmergencySafetyValve()
     }
 
+    public func redeemAmenityVoucher(_ voucher: AmenityPassVoucher) async throws {
+        let claims: AmenityPassClaims
+        do {
+            claims = try voucherVerifier.verify(voucher)
+        } catch {
+            throw EnforcementControlError.invalidAmenityVoucher(
+                error.localizedDescription
+            )
+        }
+
+        let replayed = withLock { () -> Bool in
+            if usedNonces.contains(claims.nonce) {
+                return true
+            }
+            usedNonces.insert(claims.nonce)
+            return false
+        }
+        if replayed {
+            throw EnforcementControlError.replayNonceRejected
+        }
+
+        let now = clock.nowSeconds()
+        withLock {
+            passController.install(
+                kind: claims.kind,
+                durationSeconds: TimeInterval(claims.durationSeconds),
+                at: now
+            )
+        }
+        publishEffectivePolicy(at: now)
+    }
+
     public func revokePass(kind: PassKind) async throws {
         let now = clock.nowSeconds()
         withLock {
-            if passController.active?.kind == kind {
-                passController.revoke()
-            }
+            passController.revoke(kind: kind)
         }
         publishEffectivePolicy(at: now)
     }
@@ -159,7 +189,8 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
             mode: snapshot.enforcementPolicy.mode,
             isLockedDown: snapshot.isLockedDown,
             activePassKind: snapshot.activePassKind,
-            remainingPassSeconds: snapshot.remainingPassSeconds
+            remainingPassSeconds: snapshot.remainingPassSeconds,
+            activePasses: snapshot.activePasses
         )
     }
 
@@ -312,7 +343,7 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     }
 
     private func publishEffectivePolicy(at time: TimeInterval) {
-        let next = withLock { () -> (EnforcementPolicy, FilterEnforcementSnapshot, PassKind?) in
+        let next = withLock { () -> (EnforcementPolicy, FilterEnforcementSnapshot, Set<PassKind>) in
             let clockNow = clock.nowSeconds()
             if let last = lastObservedMonotonicSeconds, clockNow + 0.000_001 < last {
                 passController.revoke()
@@ -323,31 +354,40 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
 
             passController.expireIfNeeded(at: time)
 
-            let pass = passController.active
-            let passActive = pass?.isActive(at: time) == true
+            let live = passController.activePasses(at: time)
+            let kinds = Set(live.keys)
+            let passActive = !kinds.isEmpty
             if heartbeatMonitor.hasTimedOut(at: time), !passActive {
                 basePolicy = .lockedDown
             }
 
             var policy = basePolicy
-            if passActive, let kind = pass?.kind {
-                policy = basePolicy.overlay(for: kind)
+            if passActive {
+                policy = basePolicy.overlay(for: kinds)
             } else {
                 policy.mode = .hard
             }
             effectivePolicy = policy
 
-            let remaining = passActive ? Int(pass?.remainingSeconds(at: time).rounded(.towardZero) ?? 0) : 0
+            let primary = passController.primaryPass(at: time)
+            let remaining = Int(primary?.remainingSeconds(at: time).rounded(.towardZero) ?? 0)
+            let passStatuses = live.map { kind, pass in
+                ActivePassStatus(
+                    kind: kind,
+                    remainingSeconds: Int(pass.remainingSeconds(at: time).rounded(.towardZero))
+                )
+            }
             let snapshot = FilterEnforcementSnapshot(
                 enforcementPolicy: policy,
                 isPassActive: passActive,
-                activePassKind: passActive ? pass?.kind : nil,
+                activePassKind: primary?.kind,
                 remainingPassSeconds: remaining,
-                isLockedDown: !passActive
+                isLockedDown: !passActive,
+                activePasses: passStatuses
             )
-            return (policy, snapshot, passActive ? pass?.kind : nil)
+            return (policy, snapshot, kinds)
         }
-        processSentinel.apply(next.0, passKind: next.2)
+        processSentinel.apply(next.0, passKinds: next.2)
         filterPolicyHub.publish(next.1)
         filterStatusSink?.publish(next.1)
     }

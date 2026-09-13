@@ -41,8 +41,19 @@ public struct EnforcementPolicy: Sendable, Equatable {
     /// Kind-scoped overlay. Food/phone/streaming keep process kills; gaming
     /// pauses kills without opening food or streaming domains.
     public func overlay(for kind: PassKind) -> EnforcementPolicy {
-        switch kind {
-        case .emergency:
+        overlay(for: Set([kind]))
+    }
+
+    /// Concurrent overlay. Emergency still unlocks everything. Otherwise the
+    /// union of each kind's suffixes is whitelisted and process kills pause if
+    /// any remaining kind relaxes them (gaming / emergency).
+    public func overlay(for kinds: Set<PassKind>) -> EnforcementPolicy {
+        if kinds.isEmpty {
+            var locked = self
+            locked.mode = .hard
+            return locked
+        }
+        if kinds.contains(.emergency) {
             return EnforcementPolicy(
                 domainRules: domainRules.withWhitelist(domainRules.blacklistedSuffixes),
                 processMatcher: processMatcher,
@@ -50,23 +61,17 @@ public struct EnforcementPolicy: Sendable, Equatable {
                 inspectedPorts: inspectedPorts,
                 mode: .soft
             )
-        case .food, .phone, .streaming:
-            return EnforcementPolicy(
-                domainRules: domainRules.allowing(suffixes: kind.relaxedDomainSuffixes),
-                processMatcher: processMatcher,
-                processScanIntervalSeconds: processScanIntervalSeconds,
-                inspectedPorts: inspectedPorts,
-                mode: .hard
-            )
-        case .gaming:
-            return EnforcementPolicy(
-                domainRules: domainRules,
-                processMatcher: processMatcher,
-                processScanIntervalSeconds: processScanIntervalSeconds,
-                inspectedPorts: inspectedPorts,
-                mode: .soft
-            )
         }
+
+        let suffixes = kinds.flatMap(\.relaxedDomainSuffixes)
+        let relaxProcess = kinds.contains { $0.relaxesProcessTermination }
+        return EnforcementPolicy(
+            domainRules: domainRules.allowing(suffixes: suffixes),
+            processMatcher: processMatcher,
+            processScanIntervalSeconds: processScanIntervalSeconds,
+            inspectedPorts: inspectedPorts,
+            mode: relaxProcess ? .soft : .hard
+        )
     }
 
     /// True for HTTP, HTTPS, HTTP/3 (UDP/443), and common local proxy ports.
@@ -81,6 +86,17 @@ public struct EnforcementPolicy: Sendable, Equatable {
         activePassKind: PassKind? = nil
     ) -> FilterVerdict {
         FilterFlowEvaluator(policy: self, activePassKind: activePassKind).verdict(
+            for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
+        )
+    }
+
+    public func flowVerdict(
+        hostname: String?,
+        port: UInt16?,
+        transport: TransportProtocol,
+        activePassKinds: Set<PassKind>
+    ) -> FilterVerdict {
+        FilterFlowEvaluator(policy: self, activePassKinds: activePassKinds).verdict(
             for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
         )
     }

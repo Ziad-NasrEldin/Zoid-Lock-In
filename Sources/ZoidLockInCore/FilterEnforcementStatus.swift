@@ -1,5 +1,16 @@
 import Foundation
 
+/// One concurrent daemon pass as published to the filter and the menu bar.
+public struct ActivePassStatus: Sendable, Equatable, Codable {
+    public var kind: PassKind
+    public var remainingSeconds: Int
+
+    public init(kind: PassKind, remainingSeconds: Int) {
+        self.kind = kind
+        self.remainingSeconds = remainingSeconds
+    }
+}
+
 /// Query-only snapshot of daemon enforcement state for the Network Extension.
 ///
 /// The filter may **read** this snapshot. It must never write pass state, open
@@ -10,19 +21,26 @@ public struct FilterEnforcementSnapshot: Sendable, Equatable, Codable {
     public var activePassKind: PassKind?
     public var remainingPassSeconds: Int
     public var isLockedDown: Bool
+    public var activePasses: [ActivePassStatus]
 
     public init(
         policy: EnforcementPolicySnapshot = EnforcementPolicySnapshot(),
         isPassActive: Bool = false,
         activePassKind: PassKind? = nil,
         remainingPassSeconds: Int = 0,
-        isLockedDown: Bool = true
+        isLockedDown: Bool = true,
+        activePasses: [ActivePassStatus] = []
     ) {
         self.policy = policy
         self.isPassActive = isPassActive
         self.activePassKind = activePassKind
         self.remainingPassSeconds = remainingPassSeconds
         self.isLockedDown = isLockedDown
+        self.activePasses = Self.normalizedPasses(
+            activePasses: activePasses,
+            activePassKind: activePassKind,
+            remainingPassSeconds: remainingPassSeconds
+        )
     }
 
     public init(
@@ -30,20 +48,105 @@ public struct FilterEnforcementSnapshot: Sendable, Equatable, Codable {
         isPassActive: Bool,
         activePassKind: PassKind?,
         remainingPassSeconds: Int,
-        isLockedDown: Bool
+        isLockedDown: Bool,
+        activePasses: [ActivePassStatus] = []
     ) {
         self.policy = EnforcementPolicySnapshot(enforcementPolicy)
         self.isPassActive = isPassActive
         self.activePassKind = activePassKind
         self.remainingPassSeconds = remainingPassSeconds
         self.isLockedDown = isLockedDown
+        self.activePasses = Self.normalizedPasses(
+            activePasses: activePasses,
+            activePassKind: activePassKind,
+            remainingPassSeconds: remainingPassSeconds
+        )
     }
 
     public var enforcementPolicy: EnforcementPolicy {
         policy.makePolicy()
     }
 
+    public var activePassKinds: [PassKind] {
+        activePasses.map(\.kind)
+    }
+
+    public var resolvedPassKinds: Set<PassKind> {
+        let fromPasses = Set(activePasses.map(\.kind))
+        if !fromPasses.isEmpty {
+            return fromPasses
+        }
+        return Set([activePassKind].compactMap { $0 })
+    }
+
     public static let lockedDown = FilterEnforcementSnapshot()
+
+    private static func normalizedPasses(
+        activePasses: [ActivePassStatus],
+        activePassKind: PassKind?,
+        remainingPassSeconds: Int
+    ) -> [ActivePassStatus] {
+        if !activePasses.isEmpty {
+            return activePasses.sorted { $0.kind < $1.kind }
+        }
+        if let activePassKind {
+            return [ActivePassStatus(kind: activePassKind, remainingSeconds: remainingPassSeconds)]
+        }
+        return []
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case policy
+        case isPassActive
+        case activePassKind
+        case remainingPassSeconds
+        case isLockedDown
+        case activePasses
+        case activePassKinds
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let decodedPolicy = try container.decode(EnforcementPolicySnapshot.self, forKey: .policy)
+        let decodedPassActive = try container.decode(Bool.self, forKey: .isPassActive)
+        var decodedKind = try container.decodeIfPresent(PassKind.self, forKey: .activePassKind)
+        let decodedRemaining = try container.decodeIfPresent(Int.self, forKey: .remainingPassSeconds) ?? 0
+        let decodedLocked = try container.decodeIfPresent(Bool.self, forKey: .isLockedDown) ?? true
+        let decodedPasses: [ActivePassStatus]
+        if let passes = try container.decodeIfPresent([ActivePassStatus].self, forKey: .activePasses),
+           !passes.isEmpty {
+            decodedPasses = passes.sorted { $0.kind < $1.kind }
+        } else if let kinds = try container.decodeIfPresent([PassKind].self, forKey: .activePassKinds),
+                  !kinds.isEmpty {
+            decodedPasses = kinds
+                .map { kind in ActivePassStatus(kind: kind, remainingSeconds: decodedRemaining) }
+                .sorted { $0.kind < $1.kind }
+            if decodedKind == nil {
+                decodedKind = FilterFlowEvaluator.primary(of: Set(kinds))
+            }
+        } else if let decodedKind {
+            decodedPasses = [ActivePassStatus(kind: decodedKind, remainingSeconds: decodedRemaining)]
+        } else {
+            decodedPasses = []
+        }
+        policy = decodedPolicy
+        isPassActive = decodedPassActive
+        activePassKind = decodedKind
+        remainingPassSeconds = decodedRemaining
+        isLockedDown = decodedLocked
+        activePasses = decodedPasses
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(policy, forKey: .policy)
+        try container.encode(isPassActive, forKey: .isPassActive)
+        try container.encodeIfPresent(activePassKind, forKey: .activePassKind)
+        try container.encode(remainingPassSeconds, forKey: .remainingPassSeconds)
+        try container.encode(isLockedDown, forKey: .isLockedDown)
+        try container.encode(activePasses, forKey: .activePasses)
+        try container.encode(activePassKinds, forKey: .activePassKinds)
+    }
 }
 
 /// Query-only reader used by `FilterFlowEvaluator` and `ContentFilterProvider`.
@@ -93,7 +196,7 @@ public struct ContentFilterEngine: Sendable {
         )
     }
 }
-///
+
 /// This is the wired Slice 2 seam: never UI-written, never a control RPC.
 public final class FilterPolicyHub: FilterEnforcementStatusReading, FilterEnforcementStatusPublishing, @unchecked Sendable {
     private let lock = NSLock()

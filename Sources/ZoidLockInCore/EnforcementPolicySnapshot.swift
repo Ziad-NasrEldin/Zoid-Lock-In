@@ -103,16 +103,23 @@ public struct EnforcementStatus: Sendable, Equatable, Codable {
     public var isLockedDown: Bool
     public var activePassKind: PassKind?
     public var remainingPassSeconds: Int
+    public var activePasses: [ActivePassStatus]
 
     public init(
         mode: EnforcementMode = .hard,
         isLockedDown: Bool = true,
         activePassKind: PassKind? = nil,
-        remainingPassSeconds: Int = 0
+        remainingPassSeconds: Int = 0,
+        activePasses: [ActivePassStatus] = []
     ) {
         self.mode = mode
         self.isLockedDown = isLockedDown
         self.activePassKind = activePassKind
         self.remainingPassSeconds = remainingPassSeconds
+        if activePasses.isEmpty, let activePassKind {
+            self.activePasses = [ActivePassStatus(kind: activePassKind, remainingSeconds: remainingPassSeconds)]
+        } else {
+            self.activePasses = activePasses.sorted { $0.kind < $1.kind }
+        }
     }
 }

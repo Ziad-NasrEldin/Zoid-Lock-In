@@ -82,6 +82,13 @@ public final class XPCEnforcementClient: NSObject, ZoidLockInEnforcementServicin
         }
     }
 
+    public func redeemAmenityVoucher(_ voucher: AmenityPassVoucher) async throws {
+        let data = try JSONEncoder().encode(voucher)
+        try await invoke { proxy, reply in
+            proxy.redeemAmenityVoucher(data, withReply: reply)
+        }
+    }
+
     public func revokePass(kind: PassKind) async throws {
         try await invoke { proxy, reply in
             proxy.revokePassWithKind(kind.rawValue, withReply: reply)

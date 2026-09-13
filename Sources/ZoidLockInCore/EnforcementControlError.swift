@@ -5,6 +5,7 @@ public enum EnforcementControlError: Error, Equatable, Sendable {
     case passAlreadyActive
     case emergencyCooldownActive(remainingSeconds: TimeInterval)
     case amenityPassRequiresVoucher
+    case invalidAmenityVoucher(String)
     case policyRejected(String)
     case replayNonceRejected
 }
@@ -18,6 +19,8 @@ extension EnforcementControlError: LocalizedError {
             return "Emergency safety valve is in cooldown (\(Int(remaining.rounded(.up)))s remaining)"
         case .amenityPassRequiresVoucher:
             return "Amenity passes require a Slice 4 cryptographic voucher"
+        case .invalidAmenityVoucher(let reason):
+            return "Amenity voucher rejected: \(reason)"
         case .policyRejected(let reason):
             return "Enforcement policy rejected: \(reason)"
         case .replayNonceRejected:

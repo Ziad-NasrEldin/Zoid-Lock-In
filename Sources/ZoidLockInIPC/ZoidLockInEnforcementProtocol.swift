@@ -6,9 +6,10 @@ import ZoidLockInCore
 /// NSXPC mapping pins Team ID via `ZoidLockInIdentity.xpcClientRequirement(teamID:)`.
 /// `MachServices` is advertised because `audit_token_t` validation ships with this slice.
 ///
-/// Amenity `openPass` is gated until a Slice 4 voucher exists. The filter must
-/// not be admitted to this protocol; it reads `FilterEnforcementStatusReading` only.
-public protocol ZoidLockInEnforcementServicing: Sendable {
+/// Amenity `openPass` without a voucher still fails closed. Slice 4 redeems an
+/// HMAC voucher over authenticated XPC. The filter must not be admitted to this
+/// protocol; it reads `FilterEnforcementStatusReading` only.
+public protocol ZoidLockInEnforcementServicing: Sendable, AmenityPassRedeeming {
     func applyPolicy(_ snapshot: EnforcementPolicySnapshot) async throws
     func openPass(kind: PassKind, durationSeconds: Int, nonce: String) async throws
     func revokePass(kind: PassKind) async throws

@@ -1,12 +1,12 @@
 import Foundation
 
 /// Amenity / emergency pass kind. Daemon-owned; user-space SQLite is not consulted.
-public enum PassKind: String, Sendable, Equatable, Codable {
+public enum PassKind: String, Sendable, Equatable, Hashable, Codable, CaseIterable, Comparable {
+    case emergency
     case food
     case phone
     case streaming
     case gaming
-    case emergency
 
     /// Domains this pass may whitelist. Empty means no network relax (gaming).
     public var relaxedDomainSuffixes: [String] {
@@ -33,20 +33,52 @@ public enum PassKind: String, Sendable, Equatable, Codable {
             return false
         }
     }
-}
 
-/// Stub voucher type for Slice 4 ledger passes. Slice 2 always rejects amenity
-/// `openPass` until a cryptographic voucher is presented.
-public struct AmenityPassVoucher: Sendable, Equatable, Codable {
-    public var payload: Data
-
-    public init(payload: Data = Data()) {
-        self.payload = payload
+    /// Catalog durations. The daemon ignores client-supplied durations and uses these.
+    public var catalogDurationSeconds: Int {
+        switch self {
+        case .emergency:
+            return Int(DaemonLocalPass.emergencyDurationSeconds)
+        case .food, .gaming:
+            return 30 * 60
+        case .phone, .streaming:
+            return 60 * 60
+        }
     }
 
-    /// Slice 4 will verify a signature over `(kind, duration, nonce, teamID)`.
+    /// True for ledger-backed amenity tickets. Emergency is the safety valve, not a voucher.
+    public var isAmenityPass: Bool {
+        self != .emergency
+    }
+
+    public static func < (lhs: PassKind, rhs: PassKind) -> Bool {
+        lhs.canonicalRank < rhs.canonicalRank
+    }
+
+    public var canonicalRank: Int {
+        switch self {
+        case .emergency: return 0
+        case .food: return 1
+        case .phone: return 2
+        case .streaming: return 3
+        case .gaming: return 4
+        }
+    }
+}
+
+/// HMAC-signed ticket proving a user-space ledger debit. Empty vouchers are not verified.
+public struct AmenityPassVoucher: Sendable, Equatable, Codable {
+    public var payload: Data
+    public var signature: Data
+
+    public init(payload: Data = Data(), signature: Data = Data()) {
+        self.payload = payload
+        self.signature = signature
+    }
+
+    /// Structural completeness. Cryptographic validation is `AmenityVoucherVerifier.verify`.
     public var isVerified: Bool {
-        false
+        !payload.isEmpty && !signature.isEmpty
     }
 }
 
@@ -84,16 +116,63 @@ public struct DaemonLocalPass: Sendable, Equatable {
 
 /// Privilege-process pass controller. Tick with a continuous monotonic clock;
 /// never `Date()` for expiry. Emergency activations honor a 24-hour cooldown.
+///
+/// Amenity passes are indexed by `PassKind` so Food and Phone can run at the
+/// same time without clobbering each other. Each kind expires independently.
 public struct DaemonPassController: Sendable, Equatable {
     public static let emergencyCooldownSeconds: TimeInterval = 24 * 60 * 60
 
-    public var active: DaemonLocalPass?
+    public var passes: [PassKind: DaemonLocalPass]
     public var lastEmergencyStartedAt: TimeInterval?
     public var lastEmergencyUTC: Date?
     public var lastEmergencyBootSessionUUID: String?
 
-    public init(active: DaemonLocalPass? = nil) {
-        self.active = active
+    public init(passes: [PassKind: DaemonLocalPass] = [:]) {
+        self.passes = passes
+    }
+
+    /// Primary stored pass for single-slot APIs. Emergency wins; otherwise the
+    /// soonest-expiring stored kind. Call `expireIfNeeded` before relying on liveness.
+    public var active: DaemonLocalPass? {
+        get {
+            if let emergency = passes[.emergency] {
+                return emergency
+            }
+            return passes.values.min { lhs, rhs in
+                if lhs.expiresAtSeconds != rhs.expiresAtSeconds {
+                    return lhs.expiresAtSeconds < rhs.expiresAtSeconds
+                }
+                return lhs.kind < rhs.kind
+            }
+        }
+        set {
+            if let newValue {
+                passes[newValue.kind] = newValue
+            } else {
+                passes.removeAll()
+            }
+        }
+    }
+
+    public func primaryPass(at time: TimeInterval) -> DaemonLocalPass? {
+        let live = activePasses(at: time)
+        if let emergency = live[.emergency] {
+            return emergency
+        }
+        return live.values.min { lhs, rhs in
+            if lhs.expiresAtSeconds != rhs.expiresAtSeconds {
+                return lhs.expiresAtSeconds < rhs.expiresAtSeconds
+            }
+            return lhs.kind < rhs.kind
+        }
+    }
+
+    public func activePasses(at time: TimeInterval) -> [PassKind: DaemonLocalPass] {
+        passes.filter { $0.value.isActive(at: time) }
+    }
+
+    public func activeKinds(at time: TimeInterval) -> Set<PassKind> {
+        Set(activePasses(at: time).keys)
     }
 
     public mutating func restoreCooldown(
@@ -128,7 +207,7 @@ public struct DaemonPassController: Sendable, Equatable {
         cooldownSeconds: TimeInterval = Self.emergencyCooldownSeconds
     ) throws {
         expireIfNeeded(at: time)
-        if let active, active.isActive(at: time) {
+        if let emergency = passes[.emergency], emergency.isActive(at: time) {
             throw EnforcementControlError.passAlreadyActive
         }
         let remaining = emergencyCooldownRemaining(
@@ -147,10 +226,10 @@ public struct DaemonPassController: Sendable, Equatable {
         utcNow: Date,
         bootSessionUUID: String
     ) {
-        active = DaemonLocalPass(
+        install(
             kind: .emergency,
-            startedAtSeconds: time,
-            durationSeconds: DaemonLocalPass.emergencyDurationSeconds
+            durationSeconds: DaemonLocalPass.emergencyDurationSeconds,
+            at: time
         )
         lastEmergencyStartedAt = time
         lastEmergencyUTC = utcNow
@@ -172,6 +251,8 @@ public struct DaemonPassController: Sendable, Equatable {
         commitEmergency(at: time, utcNow: utcNow, bootSessionUUID: bootSessionUUID)
     }
 
+    /// Ungated amenity open. Slice 4 requires a cryptographic voucher; this
+    /// entry still fails closed so a bare XPC `openPass` cannot mint a pass.
     public mutating func open(
         kind: PassKind,
         durationSeconds: TimeInterval,
@@ -181,23 +262,38 @@ public struct DaemonPassController: Sendable, Equatable {
         throw EnforcementControlError.amenityPassRequiresVoucher
     }
 
-    public mutating func revoke() {
-        active = nil
+    /// Installs or replaces one kind without touching other concurrent passes.
+    public mutating func install(
+        kind: PassKind,
+        durationSeconds: TimeInterval,
+        at time: TimeInterval
+    ) {
+        expireIfNeeded(at: time)
+        passes[kind] = DaemonLocalPass(
+            kind: kind,
+            startedAtSeconds: time,
+            durationSeconds: durationSeconds
+        )
     }
 
-    /// Returns true when a previously active pass just expired.
+    public mutating func revoke() {
+        passes.removeAll()
+    }
+
+    public mutating func revoke(kind: PassKind) {
+        passes.removeValue(forKey: kind)
+    }
+
+    /// Returns true when at least one previously active pass just expired.
     @discardableResult
     public mutating func expireIfNeeded(at time: TimeInterval) -> Bool {
-        guard let active else { return false }
-        if active.isActive(at: time) {
-            return false
-        }
-        self.active = nil
-        return true
+        let before = passes
+        passes = passes.filter { $0.value.isActive(at: time) }
+        return passes != before
     }
 
     public func isEmergencyPassActive(at time: TimeInterval) -> Bool {
-        guard let active, active.kind == .emergency else { return false }
-        return active.isActive(at: time)
+        guard let emergency = passes[.emergency] else { return false }
+        return emergency.isActive(at: time)
     }
 }

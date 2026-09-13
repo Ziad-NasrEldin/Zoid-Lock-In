@@ -132,14 +132,20 @@ public struct MenuBarTickerLabel: View {
     }
 }
 
-struct VermilionSeal: View {
-    var text: String
+public struct VermilionSeal: View {
+    public var text: String
+    public var size: CGFloat
 
-    var body: some View {
+    public init(text: String, size: CGFloat = 36) {
+        self.text = text
+        self.size = size
+    }
+
+    public var body: some View {
         Text(text)
-            .font(.system(size: 16, weight: .bold, design: .serif))
+            .font(.system(size: size * 0.44, weight: .bold, design: .serif))
             .foregroundStyle(Color.white)
-            .frame(width: 36, height: 36)
+            .frame(width: size, height: size)
             .background(SumiInk.seal)
             .overlay(Rectangle().stroke(SumiInk.seal, lineWidth: 1))
             .rotationEffect(.degrees(-8))

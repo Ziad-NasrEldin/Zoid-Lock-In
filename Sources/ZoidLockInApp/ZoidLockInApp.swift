@@ -8,14 +8,18 @@ import ZoidLockInIPC
 enum ZoidLockInAppEntry {
     static func main() {
         if CommandLine.arguments.contains("--render-menubar-proof") {
-            renderProofAndExit()
+            renderMenuBarProofAndExit()
+            return
+        }
+        if CommandLine.arguments.contains("--render-marketplace-proof") {
+            renderMarketplaceProofAndExit()
             return
         }
         ZoidLockInMenuBarApp.main()
     }
 
     @MainActor
-    private static func renderProofAndExit() {
+    private static func renderMenuBarProofAndExit() {
         do {
             try MenuBarTickerProofRenderer.renderPNG()
             FileHandle.standardError.write(
@@ -26,6 +30,19 @@ enum ZoidLockInAppEntry {
             exit(1)
         }
     }
+
+    @MainActor
+    private static func renderMarketplaceProofAndExit() {
+        do {
+            try MarketplaceProofRenderer.renderPNG()
+            FileHandle.standardError.write(
+                Data("Wrote \(MarketplaceProofRenderer.defaultProofURL.path)\n".utf8)
+            )
+        } catch {
+            FileHandle.standardError.write(Data("Marketplace proof render failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
 }
 
 struct ZoidLockInMenuBarApp: App {
@@ -33,7 +50,10 @@ struct ZoidLockInMenuBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarTickerView(snapshot: session.snapshot)
+            MarketplacePopoverView(
+                snapshot: session.marketplace,
+                onPurchase: session.purchase
+            )
         } label: {
             MenuBarTickerLabel(snapshot: session.snapshot)
         }
@@ -44,8 +64,10 @@ struct ZoidLockInMenuBarApp: App {
 @MainActor
 final class MenuBarSession: ObservableObject {
     @Published var snapshot: MenuBarTickerSnapshot
+    @Published var marketplace: MarketplaceSnapshot
 
     private let coordinator: EconomyTickCoordinator
+    private let marketplaceCoordinator: MarketplaceCoordinator
     private let client: XPCEnforcementClient
     private let economyQueue: DispatchQueue
     nonisolated(unsafe) private var timer: DispatchSourceTimer?
@@ -64,27 +86,53 @@ final class MenuBarSession: ObservableObject {
         let client = XPCEnforcementClient()
         client.resume()
         client.startHeartbeatLoop()
+        let marketplaceCoordinator = MarketplaceCoordinator(
+            engine: engine,
+            issuer: AmenityVoucherIssuer(),
+            redeemer: client
+        )
 
         self.coordinator = coordinator
+        self.marketplaceCoordinator = marketplaceCoordinator
         self.client = client
         self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
-        self.snapshot = (try? engine.snapshot()) ?? .proof
+        let initial = (try? engine.snapshot()) ?? .proof
+        self.snapshot = initial
+        self.marketplace = MarketplaceSnapshot.assemble(ticker: initial)
 
         let timer = DispatchSource.makeTimerSource(queue: economyQueue)
         timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
-        timer.setEventHandler { [coordinator, client] in
+        timer.setEventHandler { [coordinator, client, marketplaceCoordinator] in
             Task {
                 let next = await coordinator.reconcileIncidentsAndTick(
                     fetchIncidents: { try await client.queryUnleviedEmergencyIncidents() },
                     markLevied: { try await client.markEmergencyIncidentLevied(uuid: $0) }
                 )
+                let status = try? await client.queryStatus()
+                let market = marketplaceCoordinator.assemble(ticker: next, status: status)
                 await MainActor.run { [weak self] in
                     self?.snapshot = next
+                    self?.marketplace = market
                 }
             }
         }
         self.timer = timer
         timer.resume()
+    }
+
+    func purchase(_ kind: AmenityKind) {
+        Task {
+            do {
+                try await marketplaceCoordinator.purchase(kind)
+            } catch {
+                _ = error
+            }
+            let next = (try? marketplaceCoordinator.engine.snapshot()) ?? snapshot
+            let status = try? await client.queryStatus()
+            let market = marketplaceCoordinator.assemble(ticker: next, status: status)
+            snapshot = next
+            marketplace = market
+        }
     }
 
     deinit {

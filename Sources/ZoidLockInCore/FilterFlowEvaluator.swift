@@ -30,21 +30,32 @@ public struct FilterFlowRequest: Sendable, Equatable {
 /// an IP literal. UDP/443 (QUIC / HTTP/3) is inspected with the same rule so it
 /// cannot bypass the TCP-only matcher.
 ///
-/// Passes are **kind-scoped**. `.emergency` allows every inspected flow, including
-/// unverified hostnames. Amenity kinds whitelist only their own suffixes;
-/// unrelated blacklisted hosts and unverified identities still drop.
+/// Passes are **kind-scoped** and may be concurrent. `.emergency` allows every
+/// inspected flow, including unverified hostnames. Concurrent amenity kinds
+/// union their suffixes; unrelated blacklisted hosts and unverified identities
+/// still drop. When any one pass expires, its suffixes leave the union immediately.
 public struct FilterFlowEvaluator: Sendable, Equatable {
     public var policy: EnforcementPolicy
     public var activePassKind: PassKind?
+    public var activePassKinds: Set<PassKind>
 
     public init(policy: EnforcementPolicy = .lockedDown, activePassKind: PassKind? = nil) {
         self.policy = policy
         self.activePassKind = activePassKind
+        self.activePassKinds = Set([activePassKind].compactMap { $0 })
+    }
+
+    public init(policy: EnforcementPolicy, activePassKinds: Set<PassKind>) {
+        self.policy = policy
+        self.activePassKinds = activePassKinds
+        self.activePassKind = Self.primary(of: activePassKinds)
     }
 
     public init(snapshot: FilterEnforcementSnapshot) {
         self.policy = snapshot.enforcementPolicy
-        self.activePassKind = snapshot.activePassKind
+        let kinds = snapshot.resolvedPassKinds
+        self.activePassKinds = kinds
+        self.activePassKind = snapshot.activePassKind ?? Self.primary(of: kinds)
     }
 
     public func verdict(for request: FilterFlowRequest) -> FilterVerdict {
@@ -52,7 +63,8 @@ public struct FilterFlowEvaluator: Sendable, Equatable {
         case .other:
             return .allow
         case .tcp, .udp:
-            if activePassKind == .emergency {
+            let kinds = effectiveKinds
+            if kinds.contains(.emergency) {
                 return .allow
             }
 
@@ -60,9 +72,20 @@ public struct FilterFlowEvaluator: Sendable, Equatable {
                 return .allow
             }
 
-            let extra = activePassKind?.relaxedDomainSuffixes ?? []
+            let extra = kinds.flatMap(\.relaxedDomainSuffixes)
             let rules = policy.domainRules.allowing(suffixes: extra)
             return rules.verdict(forHostname: request.hostname)
         }
+    }
+
+    public var effectiveKinds: Set<PassKind> {
+        if !activePassKinds.isEmpty {
+            return activePassKinds
+        }
+        return Set([activePassKind].compactMap { $0 })
+    }
+
+    public static func primary(of kinds: Set<PassKind>) -> PassKind? {
+        kinds.sorted().first
     }
 }
