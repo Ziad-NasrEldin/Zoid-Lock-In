@@ -16,6 +16,12 @@ public enum ZoidLockInIdentity: Sendable {
     /// Mach service advertised by the LaunchDaemon after `audit_token_t` validation shipped.
     public static let enforcementMachServiceName = "com.mavoid.zoidlockin.enforcement"
 
+    /// Ubiquitous iCloud Drive container for encrypted `state.json` (Slice 5).
+    public static let ubiquityContainerIdentifier = "iCloud.com.mavoid.zoidlockin"
+
+    /// Finder / iCloud Drive folder name for the ubiquitous container.
+    public static let ubiquitousDirectoryName = "iCloud~com~mavoid~zoidlockin"
+
     /// Environment variable that replaces the `TEAMID` placeholder at runtime.
     /// The value must be a sanitized 10-character Team ID; anything else is ignored.
     public static let teamIdentifierEnvironmentVariable = "ZOID_LOCK_IN_TEAM_ID"

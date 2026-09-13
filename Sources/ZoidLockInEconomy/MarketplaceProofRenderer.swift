@@ -8,7 +8,7 @@ public enum MarketplaceProofError: Error, Equatable, Sendable {
 
 /// Renders `MarketplacePopoverView` to a high-resolution PNG without showing a window.
 public enum MarketplaceProofRenderer: Sendable {
-    public static let canvasSize = CGSize(width: 440, height: 668)
+    public static let canvasSize = CGSize(width: 440, height: 700)
     public static let defaultScale: CGFloat = 3
 
     public static let defaultProofURL = URL(

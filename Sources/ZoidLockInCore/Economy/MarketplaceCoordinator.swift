@@ -24,6 +24,7 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
     public let queueLabel: String
 
     private let redeemer: (any AmenityPassRedeeming)?
+    private let shield: (any MobileShieldPublishing)?
     private let clock: any MonotonicTimeProviding
     private let lock = NSLock()
     private var localTimers: [AmenityKind: (startedAt: TimeInterval, durationSeconds: TimeInterval)] = [:]
@@ -34,13 +35,15 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
         engine: ExchangeEngine,
         issuer: AmenityVoucherIssuer = AmenityVoucherIssuer(),
         redeemer: (any AmenityPassRedeeming)? = nil,
-        clock: (any MonotonicTimeProviding)? = nil
+        clock: (any MonotonicTimeProviding)? = nil,
+        shield: (any MobileShieldPublishing)? = nil
     ) {
         self.engine = engine
         self.catalog = engine.catalog
         self.issuer = issuer
         self.redeemer = redeemer
         self.clock = clock ?? MachContinuousTimeClock()
+        self.shield = shield
         self.queueLabel = "zoidlockin.economy"
     }
 
@@ -57,9 +60,21 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
         return assemble(ticker: ticker, status: status)
     }
 
-    public func assemble(ticker: MenuBarTickerSnapshot, status: EnforcementStatus?) -> MarketplaceSnapshot {
+    public func assemble(
+        ticker: MenuBarTickerSnapshot,
+        status: EnforcementStatus?,
+        mobileShield: MobileShieldStatus? = nil
+    ) -> MarketplaceSnapshot {
         let captured = withLock { () -> (String?, [AmenityKind: Int], Bool) in
             (lastError, localRemainingLocked(at: clock.nowSeconds()), inFlight)
+        }
+        let resolvedShield: MobileShieldStatus?
+        if let mobileShield {
+            resolvedShield = mobileShield
+        } else if let shield, shield.currentState.sequenceNumber > 0 {
+            resolvedShield = shield.currentStatus
+        } else {
+            resolvedShield = nil
         }
         return MarketplaceSnapshot.assemble(
             ticker: ticker,
@@ -67,7 +82,8 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
             status: status,
             localRemaining: captured.1,
             purchaseError: captured.0,
-            purchaseInFlight: captured.2
+            purchaseInFlight: captured.2,
+            mobileShield: resolvedShield
         )
     }
 
@@ -99,6 +115,7 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
             if kind == .rest, let duration = result.durationSeconds {
                 recordRest(durationSeconds: TimeInterval(duration))
             }
+            await publishShield(after: result)
             setPurchaseError(nil)
             return result
         } catch {
@@ -132,6 +149,23 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
             return true
         }
         return false
+    }
+
+    private func publishShield(after purchase: AmenityPurchase) async {
+        guard let shield else { return }
+        let ticker = (try? engine.snapshot()) ?? .proof
+        let event: MobileShieldEvent
+        if let passKind = purchase.kind.passKind, let duration = purchase.durationSeconds {
+            event = .passRedeemed(kind: passKind, durationSeconds: duration)
+        } else {
+            event = .focusTick
+        }
+        _ = await shield.publish(
+            ticker: ticker,
+            status: nil,
+            now: Date(),
+            event: event
+        )
     }
 
     private func beginPurchase() throws {

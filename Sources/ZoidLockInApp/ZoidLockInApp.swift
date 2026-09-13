@@ -15,6 +15,10 @@ enum ZoidLockInAppEntry {
             renderMarketplaceProofAndExit()
             return
         }
+        if CommandLine.arguments.contains("--render-mobile-shield-proof") {
+            renderMobileShieldProofAndExit()
+            return
+        }
         ZoidLockInMenuBarApp.main()
     }
 
@@ -43,6 +47,19 @@ enum ZoidLockInAppEntry {
             exit(1)
         }
     }
+
+    @MainActor
+    private static func renderMobileShieldProofAndExit() {
+        do {
+            try MobileShieldProofRenderer.renderPNG()
+            FileHandle.standardError.write(
+                Data("Wrote \(MobileShieldProofRenderer.defaultProofURL.path)\n".utf8)
+            )
+        } catch {
+            FileHandle.standardError.write(Data("Mobile shield proof render failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
 }
 
 struct ZoidLockInMenuBarApp: App {
@@ -50,7 +67,7 @@ struct ZoidLockInMenuBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MarketplacePopoverView(
+            MenuBarExtraView(
                 snapshot: session.marketplace,
                 onPurchase: session.purchase
             )
@@ -68,6 +85,7 @@ final class MenuBarSession: ObservableObject {
 
     private let coordinator: EconomyTickCoordinator
     private let marketplaceCoordinator: MarketplaceCoordinator
+    private let shield: MobileShieldCoordinator
     private let client: XPCEnforcementClient
     private let economyQueue: DispatchQueue
     nonisolated(unsafe) private var timer: DispatchSourceTimer?
@@ -87,14 +105,27 @@ final class MenuBarSession: ObservableObject {
         let client = XPCEnforcementClient()
         client.resume()
         client.startHeartbeatLoop()
+        let shieldStore = EncryptedStateStore(
+            fallbackDirectory: EconomicLedgerLocation.defaultFileURL()
+                .deletingLastPathComponent()
+                .appendingPathComponent("mobile-shield", isDirectory: true)
+        )
+        let shield = MobileShieldCoordinator(
+            store: shieldStore,
+            relay: PushRelayClient(
+                configuration: PushRelayConfiguration.resolve()
+            )
+        )
         let marketplaceCoordinator = MarketplaceCoordinator(
             engine: engine,
             issuer: AmenityVoucherIssuer(),
-            redeemer: client
+            redeemer: client,
+            shield: shield
         )
 
         self.coordinator = coordinator
         self.marketplaceCoordinator = marketplaceCoordinator
+        self.shield = shield
         self.client = client
         self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
         let initial = (try? engine.snapshot()) ?? .proof
@@ -103,14 +134,24 @@ final class MenuBarSession: ObservableObject {
 
         let timer = DispatchSource.makeTimerSource(queue: economyQueue)
         timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
-        timer.setEventHandler { [coordinator, client, marketplaceCoordinator] in
+        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield] in
             Task {
                 let next = await coordinator.reconcileIncidentsAndTick(
                     fetchIncidents: { try await client.queryUnleviedEmergencyIncidents() },
                     markLevied: { try await client.markEmergencyIncidentLevied(uuid: $0) }
                 )
                 let status = try? await client.queryStatus()
-                let market = marketplaceCoordinator.assemble(ticker: next, status: status)
+                let publication = await shield.publish(
+                    ticker: next,
+                    status: status,
+                    now: Date(),
+                    event: .focusTick
+                )
+                let market = marketplaceCoordinator.assemble(
+                    ticker: next,
+                    status: status,
+                    mobileShield: publication.status
+                )
                 await MainActor.run { [weak self] in
                     self?.snapshot = next
                     self?.marketplace = market
@@ -133,7 +174,17 @@ final class MenuBarSession: ObservableObject {
             }
             let next = (try? marketplaceCoordinator.engine.snapshot()) ?? snapshot
             let status = try? await client.queryStatus()
-            let market = marketplaceCoordinator.assemble(ticker: next, status: status)
+            let publication = await shield.publish(
+                ticker: next,
+                status: status,
+                now: Date(),
+                event: .focusTick
+            )
+            let market = marketplaceCoordinator.assemble(
+                ticker: next,
+                status: status,
+                mobileShield: publication.status
+            )
             snapshot = next
             marketplace = market
         }

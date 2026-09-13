@@ -70,6 +70,7 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
     public var purchaseError: String?
     public var purchaseInFlight: Bool
     public var items: [MarketplaceItemSnapshot]
+    public var mobileShield: MobileShieldStatus
 
     public init(
         spendableBalance: Double,
@@ -84,7 +85,8 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
         dayStateCaption: String,
         purchaseError: String?,
         items: [MarketplaceItemSnapshot],
-        purchaseInFlight: Bool = false
+        purchaseInFlight: Bool = false,
+        mobileShield: MobileShieldStatus = .standby
     ) {
         self.spendableBalance = CreditMath.normalize(spendableBalance)
         self.walletBalance = CreditMath.normalize(walletBalance)
@@ -99,6 +101,11 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
         self.purchaseError = purchaseError
         self.purchaseInFlight = purchaseInFlight
         self.items = items
+        self.mobileShield = mobileShield
+    }
+
+    public var mobileShieldCaption: String {
+        mobileShield.caption
     }
 
     public var formattedBalance: String {
@@ -137,7 +144,8 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
         status: EnforcementStatus? = nil,
         localRemaining: [AmenityKind: Int] = [:],
         purchaseError: String? = nil,
-        purchaseInFlight: Bool = false
+        purchaseInFlight: Bool = false,
+        mobileShield: MobileShieldStatus? = nil
     ) -> MarketplaceSnapshot {
         let remainingByPass: [PassKind: Int] = Dictionary(
             uniqueKeysWithValues: (status?.activePasses ?? []).map { ($0.kind, $0.remainingSeconds) }
@@ -179,9 +187,47 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
             dayStateCaption: ticker.dayStateCaption,
             purchaseError: purchaseError,
             items: items,
-            purchaseInFlight: purchaseInFlight
+            purchaseInFlight: purchaseInFlight,
+            mobileShield: mobileShield ?? MobileShieldStatus.derive(
+                ticker: ticker,
+                status: status,
+                localRemaining: localRemaining
+            )
         )
     }
+
+    /// Slice 5 proof: paired iPhone, live focus, food + phone windows.
+    public static let mobileShieldProof = MarketplaceSnapshot.assemble(
+        ticker: MenuBarTickerSnapshot(
+            walletBalance: 6.5,
+            spendableBalance: 6.5,
+            focusState: .active,
+            focusElapsedSeconds: 1 * 3600 + 12 * 60 + 40,
+            focusRemainingToNextMintSeconds: 1040,
+            focusCreditsEarned: 1.0,
+            multiplierApplied: 2.0,
+            currentStreak: 7,
+            highestStreak: 12,
+            lifetimeSurplus: 42.5,
+            isFridayRest: false,
+            isCurfew: false,
+            isClockTampered: false,
+            localDayKey: "2026-09-12",
+            weekdayCaption: "Saturday",
+            dayStateCaption: "Morning Focus"
+        ),
+        status: EnforcementStatus(
+            mode: .hard,
+            isLockedDown: false,
+            activePassKind: .food,
+            remainingPassSeconds: 12 * 60 + 40,
+            activePasses: [
+                ActivePassStatus(kind: .food, remainingSeconds: 12 * 60 + 40),
+                ActivePassStatus(kind: .phone, remainingSeconds: 41 * 60 + 12),
+            ]
+        ),
+        mobileShield: MobileShieldStatus(link: .paired, sessionActive: true, passActive: true)
+    )
 
     /// Deterministic high-resolution proof: two live passes, vault, full catalog.
     public static let proof = MarketplaceSnapshot.assemble(

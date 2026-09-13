@@ -1,6 +1,21 @@
 import SwiftUI
 import ZoidLockInCore
 
+/// Menu Bar extra content. Same SUMI-E marketplace plus the Mobile Shield banner.
+public struct MenuBarExtraView: View {
+    public var snapshot: MarketplaceSnapshot
+    public var onPurchase: ((AmenityKind) -> Void)?
+
+    public init(snapshot: MarketplaceSnapshot, onPurchase: ((AmenityKind) -> Void)? = nil) {
+        self.snapshot = snapshot
+        self.onPurchase = onPurchase
+    }
+
+    public var body: some View {
+        MarketplacePopoverView(snapshot: snapshot, onPurchase: onPurchase)
+    }
+}
+
 /// Native menu-bar marketplace popover: catalog, live pass timers, vault, curfew.
 public struct MarketplacePopoverView: View {
     public var snapshot: MarketplaceSnapshot
@@ -14,6 +29,7 @@ public struct MarketplacePopoverView: View {
     public var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             header
+            shieldBanner
             Divider().overlay(SumiInk.rule)
             balance
             if !snapshot.activeItems.isEmpty {
@@ -28,7 +44,7 @@ public struct MarketplacePopoverView: View {
         .padding(22)
         .frame(
             width: 440,
-            height: 668,
+            height: 700,
             alignment: .topLeading
         )
         .background(MarketplacePaperBackground())
@@ -48,7 +64,29 @@ public struct MarketplacePopoverView: View {
             Spacer()
             VermilionSeal(text: "市", size: 38)
         }
-        .padding(.bottom, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var shieldBanner: some View {
+        HStack(spacing: 10) {
+            Text("盾")
+                .font(.system(size: 12, weight: .bold, design: .serif))
+                .foregroundStyle(Color.white)
+                .frame(width: 22, height: 22)
+                .background(SumiInk.seal)
+                .overlay(Rectangle().stroke(SumiInk.seal, lineWidth: 1))
+            Text(snapshot.mobileShieldCaption)
+                .font(SumiInk.caption(10))
+                .tracking(1.4)
+                .foregroundStyle(SumiInk.seal)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(SumiInk.sealWash)
+        .overlay(Rectangle().stroke(SumiInk.seal.opacity(0.55), lineWidth: 1))
+        .padding(.bottom, 12)
     }
 
     private var balance: some View {
