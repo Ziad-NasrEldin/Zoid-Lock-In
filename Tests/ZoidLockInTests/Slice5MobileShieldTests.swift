@@ -35,7 +35,7 @@ struct Slice5MobileShieldTests {
 
     @Test("AES-GCM encrypts, decrypts, and rejects tampered ciphertext")
     func aesGCMRoundTripAndIntegrity() throws {
-        let key = MobileShieldSecrets.derivedKey(teamID: "TESTTEAMID")
+        let key = MobileShieldSecrets.randomKey()
         let state = MobileShieldState(
             sessionActive: true,
             activePasses: [],
@@ -65,7 +65,7 @@ struct Slice5MobileShieldTests {
             #expect(error == .integrityFailed)
         }
 
-        let wrongKey = MobileShieldSecrets.derivedKey(teamID: "OTHERTEAM1")
+        let wrongKey = MobileShieldSecrets.randomKey()
         do {
             _ = try EncryptedStateStore.decrypt(envelopeData, key: wrongKey)
             Issue.record("wrong key must fail integrity")
@@ -74,7 +74,7 @@ struct Slice5MobileShieldTests {
         }
     }
 
-    @Test("LWW prefers later timestamp and uses sequence as the tie-breaker")
+    @Test("sequence number is strictly authoritative over wall-clock timestamps")
     func lastWriteWinsWithSequenceTieBreak() {
         let t1 = Date(timeIntervalSince1970: 1_700_000_000)
         let t2 = t1.addingTimeInterval(1)
@@ -94,8 +94,8 @@ struct Slice5MobileShieldTests {
             streakDays: 1,
             balanceCredits: 1
         )
-        #expect(newerLowSeq.wins(over: olderHighSeq))
-        #expect(MobileShieldState.resolve(local: olderHighSeq, remote: newerLowSeq) == newerLowSeq)
+        #expect(olderHighSeq.wins(over: newerLowSeq))
+        #expect(MobileShieldState.resolve(local: olderHighSeq, remote: newerLowSeq) == olderHighSeq)
 
         let tiedLow = MobileShieldState(
             sessionActive: false,
@@ -115,7 +115,7 @@ struct Slice5MobileShieldTests {
         )
         #expect(tiedHigh.wins(over: tiedLow))
         #expect(MobileShieldState.resolve(local: tiedLow, remote: tiedHigh) == tiedHigh)
-        #expect(MobileShieldState.resolve(candidates: [olderHighSeq, newerLowSeq, tiedHigh]) == newerLowSeq)
+        #expect(MobileShieldState.resolve(candidates: [olderHighSeq, newerLowSeq, tiedHigh]) == olderHighSeq)
     }
 
     @Test("encrypted store persists to local fallback and refuses to clobber a newer snapshot")
@@ -124,7 +124,7 @@ struct Slice5MobileShieldTests {
         let store = EncryptedStateStore(
             fallbackDirectory: directory,
             ubiquityIdentifier: nil,
-            key: MobileShieldSecrets.derivedKey(teamID: "TESTTEAMID")
+            key: MobileShieldSecrets.randomKey()
         )
         #expect(!store.usesUbiquitousContainer)
         #expect(store.fileURL.lastPathComponent == "state.json")
@@ -168,11 +168,13 @@ struct Slice5MobileShieldTests {
             fallbackDirectory: fallback,
             ubiquityIdentifier: ZoidLockInIdentity.ubiquityContainerIdentifier,
             ubiquity: FixedUbiquityResolver(url: iCloud),
-            key: MobileShieldSecrets.derivedKey(teamID: "TESTTEAMID")
+            key: MobileShieldSecrets.randomKey()
         )
         #expect(store.usesUbiquitousContainer)
         #expect(store.directoryURL.path.contains(ZoidLockInIdentity.ubiquitousDirectoryName))
-        #expect(store.directoryURL.path.contains("Documents"))
+        #expect(store.directoryURL.path.contains("Library"))
+        #expect(store.directoryURL.path.contains("mobile-shield"))
+        #expect(!store.directoryURL.path.contains("/Documents/"))
         #expect(ZoidLockInIdentity.ubiquityContainerIdentifier == "iCloud.com.mavoid.zoidlockin")
 
         let state = MobileShieldState(
@@ -214,28 +216,37 @@ struct Slice5MobileShieldTests {
         #expect(payload.command.rawValue == "pass_unlocked")
         #expect(payload.targetPassKind == .phone)
         #expect(payload.durationSeconds == 3_600)
+        #expect(payload.expiresAtUtc == Date(timeIntervalSince1970: 1_700_003_600))
+        #expect(payload.localRelockDurationSeconds == 3_600)
         #expect(payload.sequenceNumber == 11)
         #expect(payload.isSilent)
         #expect(payload.aps.contentAvailable == 1)
         #expect(payload.focusMode == "Lock In")
         #expect(payload.shortcutName == "Lock In")
 
+        let endpoint = URL(string: "https://relay.test/v1/push")!
+        let signedAt = Date(timeIntervalSince1970: 1_700_000_000)
         let client = PushRelayClient(
             configuration: PushRelayConfiguration(
-                endpoint: PushRelayConfiguration.defaultEndpoint,
-                enabled: true
+                endpoint: endpoint,
+                enabled: true,
+                hmacSecret: testRelayHMACSecret
             )
         )
-        let request = try client.makeURLRequest(payload: payload)
+        let request = try client.makeURLRequest(payload: payload, now: signedAt)
         #expect(request.httpMethod == "POST")
-        #expect(request.url == PushRelayConfiguration.defaultEndpoint)
+        #expect(request.url == endpoint)
         #expect(request.url?.absoluteString.hasSuffix("/v1/push") == true)
         #expect(request.timeoutInterval == 3)
         #expect(request.value(forHTTPHeaderField: "Content-Type") == "application/json")
+        #expect(request.value(forHTTPHeaderField: PushRelayAuthenticator.timestampHeader) == "1700000000")
+        #expect(request.value(forHTTPHeaderField: PushRelayAuthenticator.signatureHeader) != nil)
 
         let body = try #require(request.httpBody)
         let json = try #require(String(data: body, encoding: .utf8))
         #expect(json.contains("\"command\":\"pass_unlocked\""))
+        #expect(json.contains("\"expiresAtUtc\""))
+        #expect(json.contains("\"localRelockDurationSeconds\":3600"))
         #expect(json.contains("\"content-available\":1"))
         #expect(json.contains("Lock In"))
         #expect(!json.contains("alert"))
@@ -276,7 +287,8 @@ struct Slice5MobileShieldTests {
                 enabled: true,
                 timeoutInterval: 0.05,
                 maxAttempts: 2,
-                retryDelayNanoseconds: 0
+                retryDelayNanoseconds: 0,
+                hmacSecret: testRelayHMACSecret
             ),
             transport: hanging
         )
@@ -302,7 +314,8 @@ struct Slice5MobileShieldTests {
                 enabled: true,
                 timeoutInterval: 1,
                 maxAttempts: 3,
-                retryDelayNanoseconds: 0
+                retryDelayNanoseconds: 0,
+                hmacSecret: testRelayHMACSecret
             ),
             transport: flaky
         )
@@ -324,7 +337,7 @@ struct Slice5MobileShieldTests {
         #expect(publication.state.sequenceNumber == 1)
         #expect(publication.state.streakDays == 0)
         #expect(publication.command == .engageLockdown)
-        #expect(publication.status.caption == "SHIELD: PAIRED · FOCUS ACTIVE")
+        #expect(publication.status.caption == "SHIELD: SYNCED · FOCUS ACTIVE")
         #expect(try store.load()?.sessionActive == true)
         #expect(try store.load()?.sequenceNumber == 1)
 
@@ -400,6 +413,8 @@ struct Slice5MobileShieldTests {
         #expect(transport.payloads.last?.command == .passUnlocked)
         #expect(transport.payloads.last?.targetPassKind == .food)
         #expect(transport.payloads.last?.durationSeconds == 1_800)
+        #expect(transport.payloads.last?.localRelockDurationSeconds == 1_800)
+        #expect(transport.payloads.last?.expiresAtUtc != nil)
 
         try await coordinator.purchase(.phone)
         let afterPhone = shield.currentState
@@ -413,7 +428,7 @@ struct Slice5MobileShieldTests {
         #expect(snapshot.mobileShieldCaption.contains("SHIELD:"))
         #expect(snapshot.mobileShield.passActive)
 
-        harness.mono.advance(by: 1_801)
+        harness.advance(1_801)
         let expiredStatus = try await daemon.queryStatus()
         #expect(expiredStatus.activePasses.contains { $0.kind == .food } == false)
         let expiry = await shield.publish(
@@ -428,7 +443,7 @@ struct Slice5MobileShieldTests {
         #expect(transport.payloads.last?.command == .passUnlocked)
         #expect(transport.payloads.last?.targetPassKind == .phone)
 
-        harness.mono.advance(by: 3_600)
+        harness.advance(3_600)
         let locked = await shield.publish(
             ticker: try harness.engine.snapshot(),
             status: try await daemon.queryStatus(),
@@ -440,10 +455,10 @@ struct Slice5MobileShieldTests {
         #expect(transport.payloads.last?.command == .engageLockdown)
     }
 
-    @Test("marketplace captions match PAIRED focus and SYNCED pass copy")
+    @Test("marketplace captions match SYNCED focus and LOCAL ONLY unconfigured copy")
     func shieldCaptions() {
-        #expect(MarketplaceSnapshot.mobileShieldProof.mobileShieldCaption == "SHIELD: PAIRED · FOCUS ACTIVE")
-        #expect(MarketplaceSnapshot.proof.mobileShieldCaption == "SHIELD: PAIRED · FOCUS ACTIVE")
+        #expect(MarketplaceSnapshot.mobileShieldProof.mobileShieldCaption == "SHIELD: SYNCED · FOCUS ACTIVE")
+        #expect(MarketplaceSnapshot.proof.mobileShieldCaption == "SHIELD: LOCAL ONLY")
 
         let idleTicker = MenuBarTickerSnapshot(
             walletBalance: 4.0,
@@ -471,12 +486,26 @@ struct Slice5MobileShieldTests {
                 activePassKind: .phone,
                 remainingPassSeconds: 1_200,
                 activePasses: [ActivePassStatus(kind: .phone, remainingSeconds: 1_200)]
+            ),
+            mobileShield: MobileShieldStatus(
+                link: .synced,
+                sessionActive: false,
+                passActive: true,
+                relayConfigured: true
             )
         )
         #expect(passOnly.mobileShieldCaption == "SHIELD: SYNCED · PASS ACTIVE")
 
         let idle = MarketplaceSnapshot.assemble(ticker: idleTicker)
-        #expect(idle.mobileShieldCaption == "SHIELD: LOCAL · LOCKED")
+        #expect(idle.mobileShieldCaption == "SHIELD: LOCAL ONLY")
+        #expect(
+            MobileShieldStatus(
+                link: .notConfigured,
+                sessionActive: false,
+                passActive: false,
+                relayConfigured: false
+            ).caption == "SHIELD: NOT CONFIGURED"
+        )
     }
 
     @Test("failed push does not throw or block a marketplace purchase")
@@ -494,7 +523,7 @@ struct Slice5MobileShieldTests {
         let store = EncryptedStateStore(
             fallbackDirectory: EncryptedStateStore.makeIsolatedDirectory(),
             ubiquityIdentifier: nil,
-            key: MobileShieldSecrets.derivedKey(teamID: "TESTTEAMID")
+            key: MobileShieldSecrets.randomKey()
         )
         let shield = MobileShieldCoordinator(
             store: store,
@@ -504,7 +533,8 @@ struct Slice5MobileShieldTests {
                     enabled: true,
                     timeoutInterval: 0.05,
                     maxAttempts: 1,
-                    retryDelayNanoseconds: 0
+                    retryDelayNanoseconds: 0,
+                    hmacSecret: testRelayHMACSecret
                 ),
                 transport: HangingHTTPTransport()
             )
@@ -540,7 +570,7 @@ struct Slice5MobileShieldTests {
         #expect((image?.size.width ?? 0) >= 440)
         #expect((image?.size.height ?? 0) >= 700)
 
-        #expect(MarketplaceSnapshot.mobileShieldProof.mobileShieldCaption == "SHIELD: PAIRED · FOCUS ACTIVE")
+        #expect(MarketplaceSnapshot.mobileShieldProof.mobileShieldCaption == "SHIELD: SYNCED · FOCUS ACTIVE")
         #expect(MarketplaceSnapshot.mobileShieldProof.activeItems.count == 2)
         #expect(MarketplaceSnapshot.mobileShieldProof.mobileShield.sessionActive)
         #expect(MarketplaceSnapshot.mobileShieldProof.mobileShield.passActive)
@@ -559,6 +589,9 @@ private func seed(_ harness: EngineHarness, credits: Double) throws {
     )
 }
 
+private let testRelayHMACSecret = "zoid-test-relay-hmac"
+private let testRelayEndpoint = URL(string: "https://relay.test/v1/push")!
+
 private func makeShield() -> (
     EncryptedStateStore,
     PushRelayClient,
@@ -568,16 +601,17 @@ private func makeShield() -> (
     let store = EncryptedStateStore(
         fallbackDirectory: EncryptedStateStore.makeIsolatedDirectory(),
         ubiquityIdentifier: nil,
-        key: MobileShieldSecrets.derivedKey(teamID: "TESTTEAMID")
+        keyProvider: InMemoryMobileShieldKeyProvider()
     )
     let transport = RecordingPushTransport()
     let relay = PushRelayClient(
         configuration: PushRelayConfiguration(
-            endpoint: URL(string: "https://relay.test/v1/push")!,
+            endpoint: testRelayEndpoint,
             enabled: true,
             timeoutInterval: 1,
             maxAttempts: 1,
-            retryDelayNanoseconds: 0
+            retryDelayNanoseconds: 0,
+            hmacSecret: testRelayHMACSecret
         ),
         transport: transport
     )
@@ -608,7 +642,7 @@ private final class RecordingPushTransport: HTTPTransporting, @unchecked Sendabl
     func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         remember(request)
         let response = HTTPURLResponse(
-            url: request.url ?? PushRelayConfiguration.defaultEndpoint,
+            url: request.url ?? testRelayEndpoint,
             statusCode: statusCode,
             httpVersion: "HTTP/1.1",
             headerFields: nil
@@ -637,7 +671,7 @@ private final class HangingHTTPTransport: HTTPTransporting, @unchecked Sendable 
         bumpAttempt()
         try await Task.sleep(nanoseconds: 10_000_000_000)
         let response = HTTPURLResponse(
-            url: request.url ?? PushRelayConfiguration.defaultEndpoint,
+            url: request.url ?? testRelayEndpoint,
             statusCode: 200,
             httpVersion: "HTTP/1.1",
             headerFields: nil
@@ -667,7 +701,7 @@ private final class FlakyHTTPTransport: HTTPTransporting, @unchecked Sendable {
         let attempt = nextAttempt()
         let code = attempt <= failuresBeforeSuccess ? failureStatus : 200
         let response = HTTPURLResponse(
-            url: request.url ?? PushRelayConfiguration.defaultEndpoint,
+            url: request.url ?? testRelayEndpoint,
             statusCode: code,
             httpVersion: "HTTP/1.1",
             headerFields: nil

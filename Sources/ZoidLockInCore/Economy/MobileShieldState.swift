@@ -5,17 +5,68 @@ public struct MobilePassRecord: Sendable, Equatable, Codable, Identifiable {
     public var kind: PassKind
     public var expiresAtUtc: Date
     public var remainingDurationSeconds: Int
+    public var localRelockDurationSeconds: Int
 
     public var id: PassKind { kind }
 
-    public init(kind: PassKind, expiresAtUtc: Date, remainingDurationSeconds: Int) {
+    enum CodingKeys: String, CodingKey {
+        case kind
+        case expiresAtUtc
+        case remainingDurationSeconds
+        case localRelockDurationSeconds
+    }
+
+    public init(
+        kind: PassKind,
+        expiresAtUtc: Date,
+        remainingDurationSeconds: Int,
+        localRelockDurationSeconds: Int? = nil
+    ) {
         self.kind = kind
         self.expiresAtUtc = MobileShieldCoding.normalize(expiresAtUtc)
         self.remainingDurationSeconds = max(0, remainingDurationSeconds)
+        self.localRelockDurationSeconds = max(
+            0,
+            localRelockDurationSeconds ?? remainingDurationSeconds
+        )
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try container.decode(PassKind.self, forKey: .kind)
+        expiresAtUtc = try container.decode(Date.self, forKey: .expiresAtUtc)
+        remainingDurationSeconds = max(0, try container.decode(Int.self, forKey: .remainingDurationSeconds))
+        localRelockDurationSeconds = max(
+            0,
+            try container.decodeIfPresent(Int.self, forKey: .localRelockDurationSeconds)
+                ?? remainingDurationSeconds
+        )
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(kind, forKey: .kind)
+        try container.encode(expiresAtUtc, forKey: .expiresAtUtc)
+        try container.encode(remainingDurationSeconds, forKey: .remainingDurationSeconds)
+        try container.encode(localRelockDurationSeconds, forKey: .localRelockDurationSeconds)
+    }
+
+    public func remaining(at now: Date) -> Int {
+        max(
+            0,
+            min(
+                remainingDurationSeconds,
+                Int(expiresAtUtc.timeIntervalSince(now).rounded(.towardZero))
+            )
+        )
+    }
+
+    public func isLive(at now: Date) -> Bool {
+        remaining(at: now) > 0
     }
 }
 
-/// Encrypted cross-device snapshot written to iCloud Drive `state.json`.
+/// Encrypted cross-device snapshot written to isolated Application Support `state.json`.
 public struct MobileShieldState: Sendable, Equatable, Codable {
     public var sessionActive: Bool
     public var activePasses: [MobilePassRecord]
@@ -39,10 +90,11 @@ public struct MobileShieldState: Sendable, Equatable, Codable {
         sequenceNumber: UInt64,
         timestamp: Date,
         streakDays: Int,
-        balanceCredits: Double
+        balanceCredits: Double,
+        now: Date? = nil
     ) {
         self.sessionActive = sessionActive
-        self.activePasses = Self.normalizedPasses(activePasses)
+        self.activePasses = Self.normalizedPasses(activePasses, now: now)
         self.sequenceNumber = sequenceNumber
         self.timestamp = MobileShieldCoding.normalize(timestamp)
         self.streakDays = max(0, streakDays)
@@ -72,12 +124,13 @@ public struct MobileShieldState: Sendable, Equatable, Codable {
             }
     }
 
-    /// Last-Write-Wins on `timestamp`, with `sequenceNumber` as the tie-breaker.
+    /// Sequence is strictly authoritative. Wall-clock timestamps are a
+    /// tie-breaker only. A poisoned future timestamp with a lower sequence loses.
     public func wins(over other: MobileShieldState) -> Bool {
-        if timestamp != other.timestamp {
-            return timestamp > other.timestamp
+        if sequenceNumber != other.sequenceNumber {
+            return sequenceNumber > other.sequenceNumber
         }
-        return sequenceNumber > other.sequenceNumber
+        return timestamp > other.timestamp
     }
 
     public static func resolve(local: MobileShieldState?, remote: MobileShieldState?) -> MobileShieldState? {
@@ -111,9 +164,27 @@ public struct MobileShieldState: Sendable, Equatable, Codable {
         return next
     }
 
-    private static func normalizedPasses(_ passes: [MobilePassRecord]) -> [MobilePassRecord] {
+    public func expiringPasses(at now: Date) -> MobileShieldState {
+        MobileShieldState(
+            sessionActive: sessionActive,
+            activePasses: activePasses.filter { $0.isLive(at: now) },
+            sequenceNumber: sequenceNumber,
+            timestamp: timestamp,
+            streakDays: streakDays,
+            balanceCredits: balanceCredits,
+            now: now
+        )
+    }
+
+    private static func normalizedPasses(_ passes: [MobilePassRecord], now: Date?) -> [MobilePassRecord] {
         var unique: [PassKind: MobilePassRecord] = [:]
-        for record in passes where record.remainingDurationSeconds > 0 {
+        for record in passes {
+            if let now, !record.isLive(at: now) {
+                continue
+            }
+            if record.remainingDurationSeconds <= 0 {
+                continue
+            }
             unique[record.kind] = record
         }
         return unique.values.sorted { $0.kind < $1.kind }
@@ -123,31 +194,50 @@ public struct MobileShieldState: Sendable, Equatable, Codable {
 /// Connection word shown in the SUMI-E marketplace / menu-bar extra.
 public enum MobileShieldLink: String, Sendable, Equatable, Codable {
     case local
+    case localOnly = "local_only"
+    case notConfigured = "not_configured"
     case paired
     case synced
 
     public var caption: String {
         switch self {
-        case .local: return "LOCAL"
-        case .paired: return "PAIRED"
-        case .synced: return "SYNCED"
+        case .local, .localOnly:
+            return "LOCAL ONLY"
+        case .notConfigured:
+            return "NOT CONFIGURED"
+        case .paired:
+            return "PAIRED"
+        case .synced:
+            return "SYNCED"
         }
     }
 }
 
-/// View-model for `SHIELD: PAIRED · FOCUS ACTIVE` / `SHIELD: SYNCED · PASS ACTIVE`.
+/// View-model for truthful `SHIELD:` captions. Unconfigured relays never claim PAIRED.
 public struct MobileShieldStatus: Sendable, Equatable {
     public var link: MobileShieldLink
     public var sessionActive: Bool
     public var passActive: Bool
+    public var relayConfigured: Bool
 
-    public init(link: MobileShieldLink, sessionActive: Bool, passActive: Bool) {
+    public init(
+        link: MobileShieldLink,
+        sessionActive: Bool,
+        passActive: Bool,
+        relayConfigured: Bool = false
+    ) {
         self.link = link
         self.sessionActive = sessionActive
         self.passActive = passActive
+        self.relayConfigured = relayConfigured
     }
 
-    public static let standby = MobileShieldStatus(link: .local, sessionActive: false, passActive: false)
+    public static let standby = MobileShieldStatus(
+        link: .notConfigured,
+        sessionActive: false,
+        passActive: false,
+        relayConfigured: false
+    )
 
     public var activityCaption: String {
         if sessionActive {
@@ -160,14 +250,22 @@ public struct MobileShieldStatus: Sendable, Equatable {
     }
 
     public var caption: String {
-        "SHIELD: \(link.caption) · \(activityCaption)"
+        switch link {
+        case .notConfigured:
+            return "SHIELD: NOT CONFIGURED"
+        case .local, .localOnly:
+            return "SHIELD: LOCAL ONLY"
+        case .paired, .synced:
+            return "SHIELD: \(link.caption) · \(activityCaption)"
+        }
     }
 
     public static func derive(
         ticker: MenuBarTickerSnapshot,
         status: EnforcementStatus?,
         localRemaining: [AmenityKind: Int] = [:],
-        link: MobileShieldLink? = nil
+        link: MobileShieldLink? = nil,
+        relayConfigured: Bool = false
     ) -> MobileShieldStatus {
         let sessionActive = ticker.focusState == .active || ticker.focusState == .pausedGrace
         let passFromDaemon = status?.activePasses.contains {
@@ -175,34 +273,44 @@ public struct MobileShieldStatus: Sendable, Equatable {
         } ?? false
         let passFromLocal = (localRemaining[.food] ?? 0) > 0 || (localRemaining[.phone] ?? 0) > 0
         let passActive = passFromDaemon || passFromLocal
-        let resolvedLink = link ?? inferredLink(sessionActive: sessionActive, passActive: passActive)
+        let resolvedLink = link ?? inferredLink(
+            sessionActive: sessionActive,
+            passActive: passActive,
+            relayConfigured: relayConfigured
+        )
         return MobileShieldStatus(
             link: resolvedLink,
             sessionActive: sessionActive,
-            passActive: passActive
+            passActive: passActive,
+            relayConfigured: relayConfigured
         )
     }
 
     public static func from(
         state: MobileShieldState,
-        link: MobileShieldLink
+        link: MobileShieldLink,
+        relayConfigured: Bool = false
     ) -> MobileShieldStatus {
         MobileShieldStatus(
             link: link,
             sessionActive: state.sessionActive,
-            passActive: state.hasMobilePass
+            passActive: state.hasMobilePass,
+            relayConfigured: relayConfigured
         )
     }
 
-    /// Matches the Slice 5 copy examples: focus → PAIRED, pass-only → SYNCED.
-    public static func inferredLink(sessionActive: Bool, passActive: Bool) -> MobileShieldLink {
-        if sessionActive {
-            return .paired
+    /// Truthful link: unconfigured relay is local-only / not configured.
+    /// Configured relays report SYNCED, never PAIRED from local focus alone.
+    public static func inferredLink(
+        sessionActive: Bool,
+        passActive: Bool,
+        relayConfigured: Bool = false
+    ) -> MobileShieldLink {
+        if !relayConfigured {
+            return .localOnly
         }
-        if passActive {
-            return .synced
-        }
-        return .local
+        _ = (sessionActive, passActive)
+        return .synced
     }
 }
 

@@ -88,6 +88,10 @@ public final class ExchangeEngine: @unchecked Sendable {
         timeTravel.isTampered
     }
 
+    public func wallTime() -> Date {
+        wallClock.now()
+    }
+
     public var activeFocusSession: FocusSessionRecord? {
         withLock { liveSession }
     }

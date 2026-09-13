@@ -5,7 +5,7 @@ import ZoidLockInCore
 ///
 /// Pins the daemon with a Team-ID-pinned designated requirement so a fake Mach
 /// service cannot impersonate the helper.
-public final class XPCEnforcementClient: NSObject, ZoidLockInEnforcementServicing, EmergencySafetyValveDispatching, @unchecked Sendable {
+public final class XPCEnforcementClient: NSObject, ZoidLockInEnforcementServicing, EmergencySafetyValveDispatching, EnforcementStatusQuerying, @unchecked Sendable {
     public let machServiceName: String
     public let daemonCodeSigningRequirement: String
     public let heartbeatIntervalSeconds: TimeInterval

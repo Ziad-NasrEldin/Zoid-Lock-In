@@ -191,12 +191,13 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
             mobileShield: mobileShield ?? MobileShieldStatus.derive(
                 ticker: ticker,
                 status: status,
-                localRemaining: localRemaining
+                localRemaining: localRemaining,
+                relayConfigured: false
             )
         )
     }
 
-    /// Slice 5 proof: paired iPhone, live focus, food + phone windows.
+    /// Slice 5 proof: configured relay, live focus, food + phone windows.
     public static let mobileShieldProof = MarketplaceSnapshot.assemble(
         ticker: MenuBarTickerSnapshot(
             walletBalance: 6.5,
@@ -226,7 +227,12 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
                 ActivePassStatus(kind: .phone, remainingSeconds: 41 * 60 + 12),
             ]
         ),
-        mobileShield: MobileShieldStatus(link: .paired, sessionActive: true, passActive: true)
+        mobileShield: MobileShieldStatus(
+            link: .synced,
+            sessionActive: true,
+            passActive: true,
+            relayConfigured: true
+        )
     )
 
     /// Deterministic high-resolution proof: two live passes, vault, full catalog.

@@ -71,7 +71,7 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
         let resolvedShield: MobileShieldStatus?
         if let mobileShield {
             resolvedShield = mobileShield
-        } else if let shield, shield.currentState.sequenceNumber > 0 {
+        } else if let shield {
             resolvedShield = shield.currentStatus
         } else {
             resolvedShield = nil
@@ -160,10 +160,14 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
         } else {
             event = .focusTick
         }
+        var status: EnforcementStatus?
+        if let querying = redeemer as? any EnforcementStatusQuerying {
+            status = try? await querying.queryStatus()
+        }
         _ = await shield.publish(
             ticker: ticker,
-            status: nil,
-            now: Date(),
+            status: status,
+            now: engine.wallTime(),
             event: event
         )
     }

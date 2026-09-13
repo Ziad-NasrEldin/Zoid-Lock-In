@@ -106,9 +106,9 @@ final class MenuBarSession: ObservableObject {
         client.resume()
         client.startHeartbeatLoop()
         let shieldStore = EncryptedStateStore(
-            fallbackDirectory: EconomicLedgerLocation.defaultFileURL()
-                .deletingLastPathComponent()
-                .appendingPathComponent("mobile-shield", isDirectory: true)
+            fallbackDirectory: EncryptedStateStore.defaultApplicationSupportDirectory(),
+            keyProvider: KeychainMobileShieldKeyProvider(),
+            highWater: KeychainSequenceHighWater()
         )
         let shield = MobileShieldCoordinator(
             store: shieldStore,
@@ -132,10 +132,13 @@ final class MenuBarSession: ObservableObject {
         self.snapshot = initial
         self.marketplace = MarketplaceSnapshot.assemble(ticker: initial)
 
+        let coalescer = TickCoalescer()
         let timer = DispatchSource.makeTimerSource(queue: economyQueue)
         timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
         timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield] in
+            guard coalescer.begin() else { return }
             Task {
+                defer { coalescer.end() }
                 let next = await coordinator.reconcileIncidentsAndTick(
                     fetchIncidents: { try await client.queryUnleviedEmergencyIncidents() },
                     markLevied: { try await client.markEmergencyIncidentLevied(uuid: $0) }
@@ -193,5 +196,26 @@ final class MenuBarSession: ObservableObject {
     deinit {
         timer?.cancel()
         client.invalidate()
+    }
+}
+
+private final class TickCoalescer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var inFlight = false
+
+    func begin() -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        if inFlight {
+            return false
+        }
+        inFlight = true
+        return true
+    }
+
+    func end() {
+        lock.lock()
+        inFlight = false
+        lock.unlock()
     }
 }

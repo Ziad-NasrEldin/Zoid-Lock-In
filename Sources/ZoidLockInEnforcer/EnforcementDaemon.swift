@@ -9,7 +9,7 @@ import ZoidLockInIPC
 /// Does **not** instantiate `ContentFilterProvider`; that type lives in
 /// `ZoidLockInFilterExtension`. The daemon publishes filter status through
 /// `FilterPolicyHub` (and optionally a file store) for query-only consumption.
-public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcementServicing, EmergencySafetyValveDispatching, FilterEnforcementStatusReading {
+public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcementServicing, EmergencySafetyValveDispatching, FilterEnforcementStatusReading, EnforcementStatusQuerying {
     public let configuration: DaemonConfiguration
     public let registrar: DaemonServiceRegistrar
     public let processSentinel: ProcessSentinel

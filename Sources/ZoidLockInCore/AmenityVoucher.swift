@@ -196,3 +196,9 @@ public struct AmenityPurchase: Sendable, Equatable {
 public protocol AmenityPassRedeeming: Sendable {
     func redeemAmenityVoucher(_ voucher: AmenityPassVoucher) async throws
 }
+
+/// Optional companion of `AmenityPassRedeeming` so purchase publishes can
+/// snapshot daemon remaining instead of copying RAM pass state.
+public protocol EnforcementStatusQuerying: Sendable {
+    func queryStatus() async throws -> EnforcementStatus
+}
