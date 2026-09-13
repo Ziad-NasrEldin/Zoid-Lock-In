@@ -197,7 +197,7 @@ public struct OfflineMeetingPopoverView: View {
 
             if snapshot.canRetryAudit, onRetryAudit != nil {
                 Button(action: { onRetryAudit?() }) {
-                    Text("RETRY FLASH AUDIT")
+                    Text("RETRY AUDIT")
                         .font(SumiInk.caption(11))
                         .tracking(2.2)
                         .foregroundStyle(Color.white)

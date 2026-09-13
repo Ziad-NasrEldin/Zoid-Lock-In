@@ -77,7 +77,7 @@ flowchart TD
 - **Classification:** Whitelisted productive tools feed focus ticks into the `ExchangeEngine`. Non-whitelisted apps, screensaver activation, or lock screens trigger an interruption timer.
 
 ### 2.3. `GeminiAuditService` (Multimodal AI Auditor & Sanitizer)
-- **Engine:** REST client targeting Google Generative AI (`gemini-1.5-flash` for initial audits; `gemini-1.5-pro` for formal appeals).
+- **Engine:** REST client targeting Google Generative AI (`gemini-2.5-flash` for initial audits; `gemini-2.5-pro` for formal appeals). Authenticate with the `x-goog-api-key` header only — never a `?key=` query parameter.
 - **Security:** API key retrieved at runtime from macOS Keychain (`kSecClassGenericPassword`, service `com.mavoid.zoidlockin.gemini`).
 - **Prompt Injection Defense:** Strips markdown tags, control characters, and known system-prompt override phrases from user agenda notes prior to injection into the LLM context.
 - **EXIF Metadata Gate:** Parses image binary EXIF headers locally before network dispatch. Requires genuine capture timestamps matching the logged meeting interval and verifies Apple camera lens/device signatures.

@@ -14,8 +14,9 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                     receipt_local_path, photo_local_path, artifacts_purge_date,
                     artifacts_purged_at, audit_status, denial_count, ai_reasoning,
                     detected_inconsistencies, appeal_statement,
-                    credits_minted, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    credits_minted, last_audit_error, audit_attempt_count, last_audit_attempted_at,
+                    created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     punch_in_time = excluded.punch_in_time,
                     punch_out_time = excluded.punch_out_time,
@@ -40,6 +41,9 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                     detected_inconsistencies = excluded.detected_inconsistencies,
                     appeal_statement = excluded.appeal_statement,
                     credits_minted = excluded.credits_minted,
+                    last_audit_error = excluded.last_audit_error,
+                    audit_attempt_count = excluded.audit_attempt_count,
+                    last_audit_attempted_at = excluded.last_audit_attempted_at,
                     created_at = excluded.created_at;
                 """,
                 Self.meetingBindings(record)
@@ -105,7 +109,8 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                receipt_local_path, photo_local_path, artifacts_purge_date,
                artifacts_purged_at, audit_status, denial_count, ai_reasoning,
                detected_inconsistencies, appeal_statement,
-               credits_minted, created_at
+               credits_minted, last_audit_error, audit_attempt_count, last_audit_attempted_at,
+               created_at
         FROM offline_meetings
         """
     }
@@ -163,6 +168,9 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
             .text(Self.encodeStringArray(record.detectedInconsistencies)),
             record.appealStatement.map(SQLiteValue.text) ?? .null,
             .double(record.creditsMinted),
+            record.lastAuditError.map(SQLiteValue.text) ?? .null,
+            .integer(Int64(record.auditAttemptCount)),
+            record.lastAuditAttemptedAt.map { .text(LedgerISO8601.string(from: $0)) } ?? .null,
             .text(LedgerISO8601.string(from: record.createdAt)),
         ]
     }
@@ -213,6 +221,9 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
             detectedInconsistencies: decodeStringArray(row["detected_inconsistencies"]),
             appealStatement: text(row["appeal_statement"]),
             creditsMinted: double(row["credits_minted"]),
+            lastAuditError: text(row["last_audit_error"]),
+            auditAttemptCount: Int(int(row["audit_attempt_count"])),
+            lastAuditAttemptedAt: textDate(row["last_audit_attempted_at"]),
             createdAt: created
         )
     }
@@ -234,7 +245,10 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                        ai_reasoning = ?,
                        detected_inconsistencies = ?,
                        appeal_statement = ?,
-                       credits_minted = ?
+                       credits_minted = ?,
+                       last_audit_error = ?,
+                       audit_attempt_count = ?,
+                       last_audit_attempted_at = ?
                  WHERE id = ?;
                 """,
                 [
@@ -244,6 +258,9 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                     .text(Self.encodeStringArray(record.detectedInconsistencies)),
                     record.appealStatement.map(SQLiteValue.text) ?? .null,
                     .double(record.creditsMinted),
+                    record.lastAuditError.map(SQLiteValue.text) ?? .null,
+                    .integer(Int64(record.auditAttemptCount)),
+                    record.lastAuditAttemptedAt.map { .text(LedgerISO8601.string(from: $0)) } ?? .null,
                     .text(record.id.uuidString),
                 ]
             )

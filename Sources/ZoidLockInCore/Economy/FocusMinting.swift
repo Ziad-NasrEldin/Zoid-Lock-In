@@ -94,7 +94,48 @@ public enum FocusMinting: Sendable {
 
 /// Verified offline-meeting yield. Same 0.5 / 30 min (1.0 / hour) rate as digital focus.
 public enum MeetingCreditMinting: Sendable {
+    /// Hard ceiling on `EARNED_MEETING` credits per local civil day.
+    public static let dailyCreditCap: Double = 4.0
+
     public static func credits(durationSeconds: TimeInterval) -> Double {
         FocusMinting.baseCredits(elapsedSeconds: durationSeconds)
+    }
+
+    public static func walletReference(meetingID: UUID) -> String {
+        "meeting:\(meetingID.uuidString)"
+    }
+
+    public static func remainingDailyBudget(earnedToday: Double) -> Double {
+        CreditMath.normalize(max(0, dailyCreditCap - earnedToday))
+    }
+
+    public static func clippedCredits(requested: Double, earnedToday: Double) -> Double {
+        CreditMath.normalize(min(max(0, requested), remainingDailyBudget(earnedToday: earnedToday)))
+    }
+}
+
+/// Result of an idempotent, daily-capped meeting mint.
+public struct MeetingCreditMintOutcome: Sendable, Equatable {
+    public var transaction: WalletTransaction?
+    public var creditsMinted: Double
+    public var requestedCredits: Double
+    public var clipped: Bool
+    public var dailyEarnedAfter: Double
+    public var explanation: String?
+
+    public init(
+        transaction: WalletTransaction?,
+        creditsMinted: Double,
+        requestedCredits: Double,
+        clipped: Bool,
+        dailyEarnedAfter: Double,
+        explanation: String? = nil
+    ) {
+        self.transaction = transaction
+        self.creditsMinted = CreditMath.normalize(creditsMinted)
+        self.requestedCredits = CreditMath.normalize(requestedCredits)
+        self.clipped = clipped
+        self.dailyEarnedAfter = CreditMath.normalize(dailyEarnedAfter)
+        self.explanation = explanation
     }
 }

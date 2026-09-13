@@ -12,6 +12,15 @@ public protocol OfflineMeetingStoring: Sendable {
     func applyAuditLifecycle(_ record: OfflineMeetingRecord) throws
 }
 
+public extension OfflineMeetingStoring {
+    /// Latest submitted meeting that is still waiting on Flash, a retry, or Pro.
+    func latestUnresolvedSubmittedMeeting() throws -> OfflineMeetingRecord? {
+        try allMeetings().last { record in
+            record.isSubmitted && !record.auditStatus.isTerminal
+        }
+    }
+}
+
 /// Deterministic in-memory adapter used by coordinator tests.
 public final class InMemoryOfflineMeetingStore: OfflineMeetingStoring, @unchecked Sendable {
     private let lock = NSRecursiveLock()

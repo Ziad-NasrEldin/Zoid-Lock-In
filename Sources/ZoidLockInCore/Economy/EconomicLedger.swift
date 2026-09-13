@@ -55,6 +55,13 @@ public final class InMemoryEconomicLedger: EconomicLedger, @unchecked Sendable {
             if transactions.contains(where: { $0.id == transaction.id }) {
                 throw EconomicLedgerError.duplicateTransaction
             }
+            if transaction.transactionType == .earnedMeeting,
+               let reference = transaction.referenceID,
+               transactions.contains(where: {
+                   $0.transactionType == .earnedMeeting && $0.referenceID == reference
+               }) {
+                throw EconomicLedgerError.duplicateTransaction
+            }
             transactions.append(transaction)
         }
     }

@@ -33,7 +33,28 @@ public final class OfflineMeetingAuditCoordinator: @unchecked Sendable {
 
     @discardableResult
     public func retryFlash(meetingID: UUID) async throws -> OfflineMeetingRecord {
-        try await auditFlash(meetingID: meetingID)
+        try await retryAudit(meetingID: meetingID)
+    }
+
+    /// Retries Flash for pending/rejected meetings, or Pro when the row is already `APPEALED`.
+    @discardableResult
+    public func retryAudit(meetingID: UUID) async throws -> OfflineMeetingRecord {
+        let record = try loadMeeting(id: meetingID)
+        switch record.auditStatus {
+        case .appealed:
+            let fallback = "Retrying Gemini Pro arbitration after a transient audit failure."
+            let statement = record.appealStatement.flatMap { raw in
+                let sanitized = PromptInjectionSanitizer.sanitizeAppeal(raw)
+                return sanitized.isEmpty ? nil : sanitized
+            } ?? fallback
+            return try await dispatch(meetingID: meetingID, model: .pro, appealStatement: statement)
+        case .pending, .rejected:
+            return try await auditFlash(meetingID: meetingID)
+        case .sealedRejected:
+            throw OfflineMeetingError.meetingSealed
+        case .inProgress, .approved, .arbitratedApproved, .abandoned:
+            throw OfflineMeetingError.alreadyResolved
+        }
     }
 
     @discardableResult
@@ -60,23 +81,33 @@ public final class OfflineMeetingAuditCoordinator: @unchecked Sendable {
             let record = try loadMeeting(id: meetingID)
             try validateTransition(record, model: model, appealing: appealStatement != nil)
 
+            var attempting = record
             if model == .pro {
-                var appealing = record
-                appealing.auditStatus = .appealed
-                appealing.appealStatement = appealStatement
-                try store.applyAuditLifecycle(appealing)
-                refreshSession(appealing)
+                attempting.auditStatus = .appealed
+                attempting.appealStatement = appealStatement
             }
+            attempting.auditAttemptCount = record.auditAttemptCount + 1
+            attempting.lastAuditAttemptedAt = engine.wallTime()
+            try store.applyAuditLifecycle(attempting)
+            refreshSession(attempting)
 
-            let evidence = try makeEvidence(record, appealStatement: appealStatement)
+            let evidence = try makeEvidence(attempting, appealStatement: appealStatement)
             let verdict = try await client.audit(evidence, model: model)
-            let updated = try persist(verdict: verdict, on: record, model: model, appealStatement: appealStatement)
+            let updated = try persist(
+                verdict: verdict,
+                on: attempting,
+                model: model,
+                appealStatement: appealStatement
+            )
             session?.setLastError(nil)
             refreshSession(updated)
             return updated
         } catch {
             let message = (error as? LocalizedError)?.errorDescription ?? String(describing: error)
             session?.setLastError(message)
+            if Self.shouldPersistAuditFailure(error) {
+                persistAuditFailure(meetingID: meetingID, message: message)
+            }
             throw error
         }
     }
@@ -129,6 +160,7 @@ public final class OfflineMeetingAuditCoordinator: @unchecked Sendable {
         var next = record
         next.aiReasoning = verdict.rationale
         next.detectedInconsistencies = verdict.detectedInconsistencies
+        next.lastAuditError = nil
         if let appealStatement {
             next.appealStatement = appealStatement
         }
@@ -155,34 +187,46 @@ public final class OfflineMeetingAuditCoordinator: @unchecked Sendable {
     }
 
     private func persistApproval(_ record: OfflineMeetingRecord) throws -> OfflineMeetingRecord {
-        try engine.ledger.performAtomically {
+        try engine.mintEarnedMeetingAndThen(
+            meetingID: record.id,
+            durationSeconds: record.durationSeconds
+        ) { outcome in
             var next = record
-            let reference = record.id.uuidString
-            if let existing = try engine.ledger.allTransactions().first(where: {
-                $0.transactionType == .earnedMeeting && $0.referenceID == reference
-            }) {
-                next.creditsMinted = existing.amount
-            } else {
-                let amount = MeetingCreditMinting.credits(durationSeconds: record.durationSeconds)
-                if amount > 0 {
-                    let balance = try engine.ledger.latestBalance()
-                    let transaction = WalletTransaction(
-                        timestamp: engine.wallTime(),
-                        amount: amount,
-                        balanceAfter: CreditMath.normalize(balance + amount),
-                        transactionType: .earnedMeeting,
-                        referenceID: reference,
-                        description: "EARNED_MEETING +\(CreditMath.normalize(amount)) (\(Int(record.durationSeconds.rounded(.down)))s)"
-                    )
-                    try engine.ledger.appendTransaction(transaction)
-                    next.creditsMinted = amount
-                } else {
-                    next.creditsMinted = 0
-                }
+            next.creditsMinted = outcome.creditsMinted
+            next.lastAuditError = nil
+            if let explanation = outcome.explanation, !explanation.isEmpty {
+                let prior = next.aiReasoning?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+                next.aiReasoning = prior.isEmpty ? explanation : prior + "\n" + explanation
             }
             try store.applyAuditLifecycle(next)
             return next
         }
+    }
+
+    private func persistAuditFailure(meetingID: UUID, message: String) {
+        guard var failed = try? store.meeting(id: meetingID) else { return }
+        failed.lastAuditError = message
+        failed.lastAuditAttemptedAt = engine.wallTime()
+        try? store.applyAuditLifecycle(failed)
+        refreshSession(failed)
+    }
+
+    private static func shouldPersistAuditFailure(_ error: Error) -> Bool {
+        if error is GeminiAuditError {
+            return true
+        }
+        if error is URLError {
+            return true
+        }
+        if let meeting = error as? OfflineMeetingError {
+            switch meeting {
+            case .auditInFlight, .alreadyResolved, .meetingSealed, .appealLocked, .appealStatementEmpty:
+                return false
+            default:
+                return true
+            }
+        }
+        return true
     }
 
     private func makeEvidence(
@@ -240,7 +284,7 @@ public final class OfflineMeetingAuditCoordinator: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         if inFlight {
-            throw OfflineMeetingError.alreadyResolved
+            throw OfflineMeetingError.auditInFlight
         }
         inFlight = true
     }

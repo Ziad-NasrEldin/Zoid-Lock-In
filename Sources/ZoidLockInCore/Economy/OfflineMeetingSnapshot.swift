@@ -241,11 +241,11 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
             submissionCaption: submission,
             auditStatusCaption: record.liveAuditCaption,
             retentionCaption: "RAW ARTIFACTS PURGE 30 DAYS",
-            lastError: lastError,
+            lastError: lastError ?? record.lastAuditError,
             geminiRationale: record.aiReasoning,
             detectedInconsistencies: record.detectedInconsistencies,
             canAppeal: record.canAppealToPro,
-            canRetryAudit: record.canRetryFlashAudit || (phase == .submitted && record.auditStatus == .pending && lastError != nil),
+            canRetryAudit: record.canRetryAudit,
             denialCount: record.denialCount,
             creditsMinted: record.creditsMinted
         )

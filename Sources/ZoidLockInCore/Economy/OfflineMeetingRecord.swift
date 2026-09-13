@@ -246,6 +246,7 @@ public enum OfflineMeetingError: Error, Equatable, Sendable {
     case appealLocked(denialCount: Int)
     case appealStatementEmpty
     case alreadyResolved
+    case auditInFlight
 }
 
 extension OfflineMeetingError: LocalizedError {
@@ -299,6 +300,8 @@ extension OfflineMeetingError: LocalizedError {
             return "Appeal explanation is empty after sanitization."
         case .alreadyResolved:
             return "This meeting has already been resolved."
+        case .auditInFlight:
+            return "A Gemini audit is already in flight for this meeting."
         }
     }
 
@@ -333,6 +336,9 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
     public var detectedInconsistencies: [String]
     public var appealStatement: String?
     public var creditsMinted: Double
+    public var lastAuditError: String?
+    public var auditAttemptCount: Int
+    public var lastAuditAttemptedAt: Date?
     public var createdAt: Date
 
     public init(
@@ -360,6 +366,9 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
         detectedInconsistencies: [String] = [],
         appealStatement: String? = nil,
         creditsMinted: Double = 0,
+        lastAuditError: String? = nil,
+        auditAttemptCount: Int = 0,
+        lastAuditAttemptedAt: Date? = nil,
         createdAt: Date
     ) {
         self.id = id
@@ -386,6 +395,9 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
         self.detectedInconsistencies = detectedInconsistencies
         self.appealStatement = appealStatement
         self.creditsMinted = CreditMath.normalize(creditsMinted)
+        self.lastAuditError = lastAuditError
+        self.auditAttemptCount = max(0, auditAttemptCount)
+        self.lastAuditAttemptedAt = lastAuditAttemptedAt
         self.createdAt = createdAt
     }
 
@@ -402,6 +414,21 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
         case .rejected:
             return denialCount > 0 && denialCount < GeminiAuditPolicy.rejectionsBeforeAppeal
         case .pending, .inProgress, .approved, .appealed, .arbitratedApproved, .sealedRejected, .abandoned:
+            return false
+        }
+    }
+
+    /// Flash rejections below the Pro gate, plus failed/orphaned pending or appealed audits.
+    public var canRetryAudit: Bool {
+        if canRetryFlashAudit {
+            return true
+        }
+        switch auditStatus {
+        case .pending:
+            return lastAuditError != nil || auditAttemptCount > 0 || lastAuditAttemptedAt != nil
+        case .appealed:
+            return true
+        default:
             return false
         }
     }

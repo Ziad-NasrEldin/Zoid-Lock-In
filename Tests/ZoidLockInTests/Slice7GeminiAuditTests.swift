@@ -112,8 +112,11 @@ struct Slice7GeminiAuditTests {
         let request = try #require(transport.requests.first)
         #expect(request.httpMethod == "POST")
         let url = try #require(request.url?.absoluteString)
-        #expect(url.contains("generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent"))
-        #expect(url.contains("key=test-gemini-key"))
+        #expect(url.contains("generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"))
+        #expect(!url.contains("key="))
+        #expect(!url.contains("test-gemini-key"))
+        #expect(request.value(forHTTPHeaderField: GeminiAuditPolicy.apiKeyHeader) == "test-gemini-key")
+        #expect(request.timeoutInterval == GeminiAuditPolicy.requestTimeout)
 
         let bodyData = try #require(request.httpBody)
         let json = try #require(JSONSerialization.jsonObject(with: bodyData) as? [String: Any])
@@ -125,6 +128,7 @@ struct Slice7GeminiAuditTests {
         let systemParts = try #require(system["parts"] as? [[String: Any]])
         let persona = try #require(systemParts.first?["text"] as? String)
         #expect(persona.contains("zero-cheat") || persona.contains("untrusted"))
+        #expect(persona.contains(GeminiAuditPolicy.visualPromptInjectionDefense))
 
         let contents = try #require(json["contents"] as? [[String: Any]])
         let parts = try #require(contents.first?["parts"] as? [[String: Any]])
@@ -165,7 +169,7 @@ struct Slice7GeminiAuditTests {
         let transactions = try harness.ledger.allTransactions()
         let minted = try #require(transactions.first { $0.transactionType == .earnedMeeting })
         #expect(minted.amount == 1.0)
-        #expect(minted.referenceID == submitted.id.uuidString)
+        #expect(minted.referenceID == MeetingCreditMinting.walletReference(meetingID: submitted.id))
         #expect(minted.description.contains("EARNED_MEETING"))
         #expect(try harness.ledger.latestBalance() == 1.0)
 
@@ -303,7 +307,7 @@ struct Slice7GeminiAuditTests {
         #expect(try harness.ledger.latestBalance() == 1.0)
 
         let proURL = try #require(harness.transport.requests.last?.url?.absoluteString)
-        #expect(proURL.contains("gemini-1.5-pro:generateContent"))
+        #expect(proURL.contains("gemini-2.5-pro:generateContent"))
     }
 
     @Test("Gemini Pro rejection permanently seals the meeting")
@@ -396,7 +400,7 @@ private final class ScriptedGeminiTransport: HTTPTransporting, @unchecked Sendab
     func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         remember(request)
         let url = request.url?.absoluteString ?? ""
-        let verdict = url.contains("gemini-1.5-pro") ? pro : flash
+        let verdict = url.contains("-pro:generateContent") ? pro : flash
 
         let body = try JSONEncoder().encode(verdict)
         let text = String(data: body, encoding: .utf8) ?? "{}"

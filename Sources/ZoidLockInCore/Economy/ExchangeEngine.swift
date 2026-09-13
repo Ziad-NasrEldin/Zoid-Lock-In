@@ -125,37 +125,136 @@ public final class ExchangeEngine: @unchecked Sendable {
         }
     }
 
-    /// Idempotent `EARNED_MEETING` mint. Returns `nil` when duration is under 30 minutes.
+    /// Idempotent, daily-capped `EARNED_MEETING` mint bound to `meeting:<uuid>`.
     @discardableResult
-    public func mintEarnedMeeting(meetingID: UUID, durationSeconds: TimeInterval) throws -> WalletTransaction? {
+    public func mintEarnedMeeting(meetingID: UUID, durationSeconds: TimeInterval) throws -> MeetingCreditMintOutcome {
         try withLock {
             try observeClocksLocked()
             try ensureWritableLocked()
-            let amount = MeetingCreditMinting.credits(durationSeconds: durationSeconds)
-            let reference = meetingID.uuidString
-            if let existing = try ledger.allTransactions().first(where: {
-                $0.transactionType == .earnedMeeting && $0.referenceID == reference
-            }) {
-                return existing
-            }
-            guard amount > 0 else {
-                return nil
-            }
             return try ledger.performAtomically {
-                let balance = try ledger.latestBalance()
-                let next = CreditMath.normalize(balance + amount)
-                let transaction = WalletTransaction(
-                    timestamp: wallClock.now(),
-                    amount: amount,
-                    balanceAfter: next,
-                    transactionType: .earnedMeeting,
-                    referenceID: reference,
-                    description: "EARNED_MEETING +\(CreditMath.normalize(amount)) (\(Int(durationSeconds.rounded(.down)))s)"
-                )
-                try ledger.appendTransaction(transaction)
-                return transaction
+                try mintEarnedMeetingBodyLocked(meetingID: meetingID, durationSeconds: durationSeconds)
             }
         }
+    }
+
+    /// Mints meeting credits and runs `body` in the same `BEGIN IMMEDIATE` (engine lock first).
+    public func mintEarnedMeetingAndThen<T>(
+        meetingID: UUID,
+        durationSeconds: TimeInterval,
+        _ body: (MeetingCreditMintOutcome) throws -> T
+    ) throws -> T {
+        try withLock {
+            try observeClocksLocked()
+            try ensureWritableLocked()
+            return try ledger.performAtomically {
+                let outcome = try mintEarnedMeetingBodyLocked(
+                    meetingID: meetingID,
+                    durationSeconds: durationSeconds
+                )
+                return try body(outcome)
+            }
+        }
+    }
+
+    public func earnedMeetingCredits(onLocalDay day: String) throws -> Double {
+        try withLock {
+            try earnedMeetingCreditsOnLocalDayLocked(day)
+        }
+    }
+
+    private func mintEarnedMeetingBodyLocked(
+        meetingID: UUID,
+        durationSeconds: TimeInterval
+    ) throws -> MeetingCreditMintOutcome {
+        let reference = MeetingCreditMinting.walletReference(meetingID: meetingID)
+        let requested = MeetingCreditMinting.credits(durationSeconds: durationSeconds)
+        let day = civilClock.dayKey(wallClock.now())
+        if let existing = try existingEarnedMeetingLocked(reference: reference) {
+            let earnedToday = try earnedMeetingCreditsOnLocalDayLocked(day)
+            return MeetingCreditMintOutcome(
+                transaction: existing,
+                creditsMinted: existing.amount,
+                requestedCredits: requested,
+                clipped: false,
+                dailyEarnedAfter: earnedToday,
+                explanation: nil
+            )
+        }
+
+        let earnedToday = try earnedMeetingCreditsOnLocalDayLocked(day)
+        let remaining = MeetingCreditMinting.remainingDailyBudget(earnedToday: earnedToday)
+        let amount = MeetingCreditMinting.clippedCredits(requested: requested, earnedToday: earnedToday)
+        let clipped = requested > 0 && amount + 0.000_1 < requested
+        let explanation: String?
+        if remaining <= 0 && requested > 0 {
+            explanation = "Daily meeting credit cap of \(CreditMath.normalize(MeetingCreditMinting.dailyCreditCap)) already reached; no credits minted."
+        } else if clipped {
+            explanation = "Clipped meeting credits from \(CreditMath.normalize(requested)) to \(CreditMath.normalize(amount)) (daily EARNED_MEETING cap \(CreditMath.normalize(MeetingCreditMinting.dailyCreditCap)))."
+        } else {
+            explanation = nil
+        }
+
+        guard amount > 0 else {
+            return MeetingCreditMintOutcome(
+                transaction: nil,
+                creditsMinted: 0,
+                requestedCredits: requested,
+                clipped: clipped || (requested > 0 && remaining <= 0),
+                dailyEarnedAfter: earnedToday,
+                explanation: explanation
+            )
+        }
+
+        do {
+            let balance = try ledger.latestBalance()
+            let next = CreditMath.normalize(balance + amount)
+            let durationLabel = Int(durationSeconds.rounded(.down))
+            let clipNote = clipped ? " clipped from \(CreditMath.normalize(requested))" : ""
+            let transaction = WalletTransaction(
+                timestamp: wallClock.now(),
+                amount: amount,
+                balanceAfter: next,
+                transactionType: .earnedMeeting,
+                referenceID: reference,
+                description: "EARNED_MEETING +\(CreditMath.normalize(amount)) (\(durationLabel)s)\(clipNote)"
+            )
+            try ledger.appendTransaction(transaction)
+            return MeetingCreditMintOutcome(
+                transaction: transaction,
+                creditsMinted: amount,
+                requestedCredits: requested,
+                clipped: clipped,
+                dailyEarnedAfter: CreditMath.normalize(earnedToday + amount),
+                explanation: explanation
+            )
+        } catch EconomicLedgerError.duplicateTransaction {
+            if let existing = try existingEarnedMeetingLocked(reference: reference) {
+                let earned = try earnedMeetingCreditsOnLocalDayLocked(day)
+                return MeetingCreditMintOutcome(
+                    transaction: existing,
+                    creditsMinted: existing.amount,
+                    requestedCredits: requested,
+                    clipped: false,
+                    dailyEarnedAfter: earned,
+                    explanation: nil
+                )
+            }
+            throw EconomicLedgerError.duplicateTransaction
+        }
+    }
+
+    private func existingEarnedMeetingLocked(reference: String) throws -> WalletTransaction? {
+        try ledger.allTransactions().first { transaction in
+            transaction.transactionType == .earnedMeeting && transaction.referenceID == reference
+        }
+    }
+
+    private func earnedMeetingCreditsOnLocalDayLocked(_ day: String) throws -> Double {
+        let txs = try ledger.transactions(onLocalDay: day, clock: civilClock)
+        return CreditMath.normalize(
+            txs.filter { $0.transactionType == .earnedMeeting }
+                .reduce(0) { $0 + $1.amount }
+        )
     }
 
     public func wallTime() -> Date {

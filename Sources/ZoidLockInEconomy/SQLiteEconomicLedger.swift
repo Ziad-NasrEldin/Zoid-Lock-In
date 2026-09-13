@@ -329,6 +329,13 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             "CREATE INDEX IF NOT EXISTS idx_wallet_transactions_timestamp ON wallet_transactions(timestamp);"
         )
         try database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_earned_meeting_ref
+            ON wallet_transactions(reference_id)
+            WHERE transaction_type = 'EARNED_MEETING' AND reference_id IS NOT NULL;
+            """
+        )
+        try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_focus_sessions_state ON focus_sessions(state);"
         )
         try database.execute(
@@ -358,6 +365,9 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 detected_inconsistencies TEXT,
                 appeal_statement TEXT,
                 credits_minted REAL NOT NULL DEFAULT 0.0,
+                last_audit_error TEXT,
+                audit_attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_audit_attempted_at TEXT,
                 created_at TEXT NOT NULL
             );
             """
@@ -366,6 +376,9 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         try addColumnIfNeeded(database, table: "offline_meetings", column: "punch_out_uptime", definition: "REAL")
         try addColumnIfNeeded(database, table: "offline_meetings", column: "detected_inconsistencies", definition: "TEXT")
         try addColumnIfNeeded(database, table: "offline_meetings", column: "appeal_statement", definition: "TEXT")
+        try addColumnIfNeeded(database, table: "offline_meetings", column: "last_audit_error", definition: "TEXT")
+        try addColumnIfNeeded(database, table: "offline_meetings", column: "audit_attempt_count", definition: "INTEGER NOT NULL DEFAULT 0")
+        try addColumnIfNeeded(database, table: "offline_meetings", column: "last_audit_attempted_at", definition: "TEXT")
         try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_meetings_status ON offline_meetings(audit_status);"
         )

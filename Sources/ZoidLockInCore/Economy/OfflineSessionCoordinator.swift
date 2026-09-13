@@ -37,7 +37,12 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
         self.timeTravel = timeTravel
         self.bootSessionUUID = bootSessionUUID
         self.photoValidator = MeetingPhotoValidator(timeZone: timeZone)
-        self.active = try? store.recordingMeeting()
+        if let recording = try? store.recordingMeeting() {
+            self.active = recording
+        } else {
+            self.active = try? store.latestUnresolvedSubmittedMeeting()
+        }
+        self.lastError = self.active?.lastAuditError
     }
 
     public func bindFocusEngine(_ engine: ExchangeEngine) {

@@ -295,7 +295,7 @@ final class MenuBarSession: ObservableObject {
         guard let id = meetings.activeMeeting?.id ?? meeting.meetingID else { return }
         Task {
             do {
-                _ = try await auditor.retryFlash(meetingID: id)
+                _ = try await auditor.retryAudit(meetingID: id)
             } catch {
                 _ = error
             }
