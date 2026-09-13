@@ -9,6 +9,7 @@ public protocol OfflineMeetingStoring: Sendable {
     func meetingsEligibleForPurge(at now: Date) throws -> [OfflineMeetingRecord]
     func markArtifactsPurged(id: UUID, at date: Date) throws
     func hasRegisteredArtifactHash(_ sha256: String, kind: MeetingArtifactKind, excluding meetingID: UUID) throws -> Bool
+    func applyAuditLifecycle(_ record: OfflineMeetingRecord) throws
 }
 
 /// Deterministic in-memory adapter used by coordinator tests.
@@ -75,6 +76,15 @@ public final class InMemoryOfflineMeetingStore: OfflineMeetingStoring, @unchecke
                     && other.auditStatus != .abandoned
                     && other.sha256(for: kind) == sha256
             }
+        }
+    }
+
+    public func applyAuditLifecycle(_ record: OfflineMeetingRecord) throws {
+        try withLock {
+            guard records[record.id] != nil else {
+                throw OfflineMeetingError.meetingNotFound
+            }
+            records[record.id] = record
         }
     }
 

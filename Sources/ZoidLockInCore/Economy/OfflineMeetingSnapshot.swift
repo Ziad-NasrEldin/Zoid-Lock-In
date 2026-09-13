@@ -61,6 +61,12 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
     public var auditStatusCaption: String
     public var retentionCaption: String
     public var lastError: String?
+    public var geminiRationale: String?
+    public var detectedInconsistencies: [String]
+    public var canAppeal: Bool
+    public var canRetryAudit: Bool
+    public var denialCount: Int
+    public var creditsMinted: Double
 
     public init(
         phase: OfflineMeetingPhase,
@@ -81,7 +87,13 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
         submissionCaption: String,
         auditStatusCaption: String,
         retentionCaption: String,
-        lastError: String?
+        lastError: String?,
+        geminiRationale: String? = nil,
+        detectedInconsistencies: [String] = [],
+        canAppeal: Bool = false,
+        canRetryAudit: Bool = false,
+        denialCount: Int = 0,
+        creditsMinted: Double = 0
     ) {
         self.phase = phase
         self.meetingID = meetingID
@@ -102,6 +114,12 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
         self.auditStatusCaption = auditStatusCaption
         self.retentionCaption = retentionCaption
         self.lastError = lastError
+        self.geminiRationale = geminiRationale
+        self.detectedInconsistencies = detectedInconsistencies
+        self.canAppeal = canAppeal
+        self.canRetryAudit = canRetryAudit
+        self.denialCount = denialCount
+        self.creditsMinted = CreditMath.normalize(creditsMinted)
     }
 
     public var artifacts: [MeetingArtifactStatus] {
@@ -183,7 +201,23 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
                 ? "TRIPLE ARTIFACT READY · SUBMIT"
                 : "AWAITING \(missing.map { $0.displayName.uppercased() }.joined(separator: " · "))"
         case .submitted:
-            submission = "SUBMITTED · PENDING GEMINI"
+            switch record.auditStatus {
+            case .approved, .arbitratedApproved:
+                submission = String(
+                    format: "APPROVED · +%0.1fc MINTED",
+                    CreditMath.normalize(record.creditsMinted)
+                )
+            case .rejected where record.canAppealToPro:
+                submission = "READY FOR PRO ARBITRATION"
+            case .rejected:
+                submission = "REJECTED · FLASH AUDIT"
+            case .appealed:
+                submission = "APPEALED · GEMINI PRO"
+            case .sealedRejected:
+                submission = "SEALED · NO FURTHER CLAIMS"
+            default:
+                submission = "SUBMITTED · PENDING GEMINI"
+            }
         }
 
         return OfflineMeetingSnapshot(
@@ -199,15 +233,21 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
             notes: notes,
             receipt: receipt,
             photo: photo,
-            canPunchIn: phase == .idle || phase == .submitted,
+            canPunchIn: phase == .idle || (phase == .submitted && record.auditStatus.isTerminal && record.auditStatus != .abandoned),
             canPunchOut: phase == .recording,
             canSubmit: canSubmit,
             canAbandon: phase == .recording || phase == .awaitingEvidence,
             punchButtonTitle: punchTitle,
             submissionCaption: submission,
-            auditStatusCaption: record.auditStatus.rawValue.replacingOccurrences(of: "_", with: " "),
+            auditStatusCaption: record.liveAuditCaption,
             retentionCaption: "RAW ARTIFACTS PURGE 30 DAYS",
-            lastError: lastError
+            lastError: lastError,
+            geminiRationale: record.aiReasoning,
+            detectedInconsistencies: record.detectedInconsistencies,
+            canAppeal: record.canAppealToPro,
+            canRetryAudit: record.canRetryFlashAudit || (phase == .submitted && record.auditStatus == .pending && lastError != nil),
+            denialCount: record.denialCount,
+            creditsMinted: record.creditsMinted
         )
     }
 
@@ -233,7 +273,13 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
             submissionCaption: "IDLE · PUNCH IN TO START",
             auditStatusCaption: "STANDBY",
             retentionCaption: "RAW ARTIFACTS PURGE 30 DAYS",
-            lastError: lastError
+            lastError: lastError,
+            geminiRationale: nil,
+            detectedInconsistencies: [],
+            canAppeal: false,
+            canRetryAudit: false,
+            denialCount: 0,
+            creditsMinted: 0
         )
     }
 
@@ -276,9 +322,68 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
         canAbandon: false,
         punchButtonTitle: "PUNCHED",
         submissionCaption: "SUBMITTED · PENDING GEMINI",
-        auditStatusCaption: "PENDING",
+        auditStatusCaption: "PENDING AUDIT",
         retentionCaption: "RAW ARTIFACTS PURGE 30 DAYS",
-        lastError: nil
+        lastError: nil,
+        geminiRationale: nil,
+        detectedInconsistencies: [],
+        canAppeal: false,
+        canRetryAudit: false,
+        denialCount: 0,
+        creditsMinted: 0
+    )
+
+    /// Slice 7 proof: three Flash rejections unlock Gemini Pro arbitration.
+    public static let geminiAuditProof = OfflineMeetingSnapshot(
+        phase: .submitted,
+        meetingID: UUID(uuidString: "7E0A1111-2222-4333-8444-555566667777"),
+        elapsedSeconds: 60 * 60,
+        elapsedCaption: "01:00:00",
+        punchInCaption: "09:00 UTC",
+        punchOutCaption: "10:00 UTC",
+        durationCaption: "60 min · 15–240 gate",
+        notes: MeetingArtifactStatus(
+            kind: .notes,
+            isPresent: true,
+            isValid: true,
+            filename: "notes.md",
+            sha256: "c0ffeeabc123def4567890aa",
+            caption: "READY · notes.md"
+        ),
+        receipt: MeetingArtifactStatus(
+            kind: .receipt,
+            isPresent: true,
+            isValid: true,
+            filename: "receipt.pdf",
+            sha256: "a11ce0b0b1e2c3d4e5f60718",
+            caption: "READY · receipt.pdf"
+        ),
+        photo: MeetingArtifactStatus(
+            kind: .environmentPhoto,
+            isPresent: true,
+            isValid: true,
+            filename: "environment.jpg",
+            sha256: "0ff1ceapplecam00aa11bb22",
+            caption: "VALID · APPLE CAMERA"
+        ),
+        canPunchIn: false,
+        canPunchOut: false,
+        canSubmit: false,
+        canAbandon: false,
+        punchButtonTitle: "PUNCHED",
+        submissionCaption: "READY FOR PRO ARBITRATION",
+        auditStatusCaption: "READY FOR PRO ARBITRATION",
+        retentionCaption: "RAW ARTIFACTS PURGE 30 DAYS",
+        lastError: nil,
+        geminiRationale: "Receipt timestamp precedes punch-in by four hours, and the environment photo does not match the stated workshop venue.",
+        detectedInconsistencies: [
+            "Receipt date precedes punch-in",
+            "Environment does not match agenda location",
+        ],
+        canAppeal: true,
+        canRetryAudit: false,
+        denialCount: 3,
+        creditsMinted: 0
     )
 
     private static func emptyStatus(_ kind: MeetingArtifactKind) -> MeetingArtifactStatus {

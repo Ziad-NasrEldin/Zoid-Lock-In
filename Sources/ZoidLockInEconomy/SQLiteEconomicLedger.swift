@@ -355,6 +355,8 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 audit_status TEXT NOT NULL DEFAULT 'PENDING',
                 denial_count INTEGER NOT NULL DEFAULT 0,
                 ai_reasoning TEXT,
+                detected_inconsistencies TEXT,
+                appeal_statement TEXT,
                 credits_minted REAL NOT NULL DEFAULT 0.0,
                 created_at TEXT NOT NULL
             );
@@ -362,6 +364,8 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         )
         try addColumnIfNeeded(database, table: "offline_meetings", column: "punch_in_uptime", definition: "REAL")
         try addColumnIfNeeded(database, table: "offline_meetings", column: "punch_out_uptime", definition: "REAL")
+        try addColumnIfNeeded(database, table: "offline_meetings", column: "detected_inconsistencies", definition: "TEXT")
+        try addColumnIfNeeded(database, table: "offline_meetings", column: "appeal_statement", definition: "TEXT")
         try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_meetings_status ON offline_meetings(audit_status);"
         )
@@ -381,6 +385,9 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             ON offline_meetings(photo_image_sha256)
             WHERE photo_image_sha256 IS NOT NULL AND audit_status != 'ABANDONED';
             """
+        )
+        try database.execute(
+            "DROP TRIGGER IF EXISTS offline_meetings_submitted_evidence_immutable;"
         )
         try database.execute(
             """
@@ -403,9 +410,24 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                    OR NEW.notes_sha256 IS NOT OLD.notes_sha256
                    OR NEW.receipt_image_sha256 IS NOT OLD.receipt_image_sha256
                    OR NEW.photo_image_sha256 IS NOT OLD.photo_image_sha256
-                   OR NEW.created_at IS NOT OLD.created_at
+                   OR NEW.created_at IS NOT OLD.created_at;
+            END;
+            """
+        )
+        try database.execute(
+            "DROP TRIGGER IF EXISTS offline_meetings_terminal_audit_lock;"
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS offline_meetings_terminal_audit_lock
+            BEFORE UPDATE ON offline_meetings
+            FOR EACH ROW
+            WHEN OLD.audit_status IN ('APPROVED', 'ARBITRATED_APPROVED', 'SEALED_REJECTED')
+            BEGIN
+                SELECT RAISE(ABORT, 'offline_meetings audit is sealed')
+                WHERE NEW.audit_status IS NOT OLD.audit_status
                    OR NEW.credits_minted IS NOT OLD.credits_minted
-                   OR NEW.audit_status IS NOT OLD.audit_status;
+                   OR NEW.denial_count IS NOT OLD.denial_count;
             END;
             """
         )

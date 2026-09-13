@@ -279,6 +279,18 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
         return record
     }
 
+    public func setLastError(_ message: String?) {
+        withLock { lastError = message }
+    }
+
+    public func replaceActive(with record: OfflineMeetingRecord) {
+        withLock {
+            if active?.id == record.id || active == nil {
+                active = record
+            }
+        }
+    }
+
     public func snapshot() -> OfflineMeetingSnapshot {
         withLock {
             OfflineMeetingSnapshot.assemble(

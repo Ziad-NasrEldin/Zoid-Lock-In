@@ -3,11 +3,22 @@ import Foundation
 /// Signed wallet mutation recorded in the append-only ledger.
 public enum WalletTransactionType: String, Sendable, Equatable, Codable {
     case mint
+    case earnedMeeting = "EARNED_MEETING"
     case spend
     case refund = "refund_amenity"
     case penalty
     case reset
     case surplusTransfer = "surplus_transfer"
+
+    /// Credits that count toward the daily 3.0 target.
+    public var countsAsDailyEarned: Bool {
+        switch self {
+        case .mint, .earnedMeeting:
+            return true
+        case .spend, .refund, .penalty, .reset, .surplusTransfer:
+            return false
+        }
+    }
 }
 
 /// Persistent focus-session state machine.

@@ -9,23 +9,31 @@ public struct OfflineMeetingPopoverView: View {
     public var onSubmit: (() -> Void)?
     public var onAbandon: (() -> Void)?
     public var onImportArtifact: ((MeetingArtifactKind, URL) -> Void)?
+    public var onRetryAudit: (() -> Void)?
+    public var onAppeal: ((String) -> Void)?
 
     @State private var importingKind: MeetingArtifactKind?
     @State private var targetedKind: MeetingArtifactKind?
     @State private var confirmAbandon = false
+    @State private var showAppeal = false
+    @State private var appealStatement = ""
 
     public init(
         snapshot: OfflineMeetingSnapshot,
         onPunchToggle: (() -> Void)? = nil,
         onSubmit: (() -> Void)? = nil,
         onAbandon: (() -> Void)? = nil,
-        onImportArtifact: ((MeetingArtifactKind, URL) -> Void)? = nil
+        onImportArtifact: ((MeetingArtifactKind, URL) -> Void)? = nil,
+        onRetryAudit: (() -> Void)? = nil,
+        onAppeal: ((String) -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.onPunchToggle = onPunchToggle
         self.onSubmit = onSubmit
         self.onAbandon = onAbandon
         self.onImportArtifact = onImportArtifact
+        self.onRetryAudit = onRetryAudit
+        self.onAppeal = onAppeal
     }
 
     public var body: some View {
@@ -36,11 +44,14 @@ public struct OfflineMeetingPopoverView: View {
             Divider().overlay(SumiInk.rule)
             dropzone
             summary
+            if snapshot.phase == .submitted {
+                audit
+            }
             Spacer(minLength: 8)
             footer
         }
         .padding(22)
-        .frame(width: 440, height: 700, alignment: .topLeading)
+        .frame(width: 440, height: 860, alignment: .topLeading)
         .background(MarketplacePaperBackground())
         .fileImporter(
             isPresented: importPresented,
@@ -48,6 +59,9 @@ public struct OfflineMeetingPopoverView: View {
             allowsMultipleSelection: false
         ) { result in
             handleImport(result)
+        }
+        .sheet(isPresented: $showAppeal) {
+            appealSheet
         }
     }
 
@@ -75,19 +89,25 @@ public struct OfflineMeetingPopoverView: View {
                     .font(SumiInk.display(42))
                     .monospacedDigit()
                     .foregroundStyle(SumiInk.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .layoutPriority(1)
                 Text("ELAPSED")
                     .font(SumiInk.caption(11))
                     .tracking(2)
                     .foregroundStyle(SumiInk.seal)
-                Spacer()
+                Spacer(minLength: 8)
                 Text(snapshot.auditStatusCaption)
-                    .font(SumiInk.caption(10))
-                    .tracking(1.4)
+                    .font(SumiInk.caption(9))
+                    .tracking(1.1)
                     .foregroundStyle(SumiInk.seal)
+                    .multilineTextAlignment(.trailing)
+                    .lineLimit(3)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
                     .background(SumiInk.sealWash)
                     .overlay(Rectangle().stroke(SumiInk.seal.opacity(0.55), lineWidth: 1))
+                    .frame(maxWidth: 148, alignment: .trailing)
             }
 
             HStack(spacing: 18) {
@@ -144,6 +164,126 @@ public struct OfflineMeetingPopoverView: View {
             metric(label: "GATE", value: snapshot.phase == .submitted ? "TRIPLE ARTIFACT VALID" : snapshot.submissionCaption)
         }
         .padding(.top, 16)
+    }
+
+    private var audit: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("GEMINI AUDIT")
+                .font(SumiInk.caption(10))
+                .tracking(1.8)
+                .foregroundStyle(SumiInk.inkMuted)
+                .padding(.bottom, 2)
+
+            Text(snapshot.auditStatusCaption)
+                .font(SumiInk.caption(11))
+                .tracking(1.4)
+                .foregroundStyle(SumiInk.seal)
+
+            if let rationale = snapshot.geminiRationale, !rationale.isEmpty {
+                Text(rationale)
+                    .font(SumiInk.body(12))
+                    .foregroundStyle(SumiInk.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !snapshot.detectedInconsistencies.isEmpty {
+                ForEach(snapshot.detectedInconsistencies, id: \.self) { item in
+                    Text("· \(item)")
+                        .font(SumiInk.body(11))
+                        .foregroundStyle(SumiInk.inkMuted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if snapshot.canRetryAudit, onRetryAudit != nil {
+                Button(action: { onRetryAudit?() }) {
+                    Text("RETRY FLASH AUDIT")
+                        .font(SumiInk.caption(11))
+                        .tracking(2.2)
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(SumiInk.ink)
+                }
+                .buttonStyle(.plain)
+            }
+
+            if snapshot.canAppeal {
+                Button {
+                    showAppeal = true
+                } label: {
+                    Text("APPEAL TO GEMINI PRO")
+                        .font(SumiInk.caption(11))
+                        .tracking(2.2)
+                        .foregroundStyle(Color.white)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(SumiInk.seal)
+                }
+                .buttonStyle(.plain)
+                .disabled(onAppeal == nil)
+                .opacity(onAppeal == nil ? 0.55 : 1)
+            }
+        }
+        .padding(.top, 14)
+    }
+
+    private var appealSheet: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("GEMINI PRO")
+                        .font(SumiInk.caption(11))
+                        .tracking(3.2)
+                        .foregroundStyle(SumiInk.inkMuted)
+                    Text("ARBITRATION APPEAL")
+                        .font(SumiInk.body(15))
+                        .foregroundStyle(SumiInk.ink)
+                }
+                Spacer()
+                VermilionSeal(text: "審", size: 34)
+            }
+
+            Text("Three Flash rejections are on record. Explain the edge case. The statement is sanitized before dispatch.")
+                .font(SumiInk.body(12))
+                .foregroundStyle(SumiInk.inkMuted)
+
+            TextEditor(text: $appealStatement)
+                .font(SumiInk.body(13))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(minHeight: 140)
+                .background(SumiInk.paperSoft)
+                .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+
+            Button {
+                let statement = appealStatement
+                showAppeal = false
+                appealStatement = ""
+                onAppeal?(statement)
+            } label: {
+                Text("SUBMIT TO GEMINI PRO")
+                    .font(SumiInk.caption(11))
+                    .tracking(2.2)
+                    .foregroundStyle(Color.white)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .background(SumiInk.seal)
+            }
+            .buttonStyle(.plain)
+            .disabled(appealStatement.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+            Button("DISMISS") {
+                showAppeal = false
+            }
+            .buttonStyle(.plain)
+            .font(SumiInk.caption(10))
+            .foregroundStyle(SumiInk.inkMuted)
+            Spacer()
+        }
+        .padding(22)
+        .frame(width: 420, height: 420)
+        .background(SumiInk.paper)
     }
 
     private func artifactRow(_ status: MeetingArtifactStatus, glyph: String) -> some View {

@@ -77,16 +77,49 @@ public enum MeetingNotesPolicy: Sendable {
     }
 }
 
-/// Gemini (and local) audit lifecycle. Slice 6 writes `IN_PROGRESS` and `PENDING`.
+/// Gemini (and local) audit lifecycle. Slice 7 writes Flash/Pro terminal states.
 public enum OfflineMeetingAuditStatus: String, Sendable, Equatable, Codable {
     case inProgress = "IN_PROGRESS"
     case pending = "PENDING"
     case approved = "APPROVED"
     case rejected = "REJECTED"
     case appealed = "APPEALED"
-    case appealApproved = "APPEAL_APPROVED"
+    case arbitratedApproved = "ARBITRATED_APPROVED"
     case sealedRejected = "SEALED_REJECTED"
     case abandoned = "ABANDONED"
+
+    /// Terminal rows cannot be re-audited or appealed.
+    public var isTerminal: Bool {
+        switch self {
+        case .approved, .arbitratedApproved, .sealedRejected, .abandoned:
+            return true
+        case .inProgress, .pending, .rejected, .appealed:
+            return false
+        }
+    }
+
+    public func liveCaption(denialCount: Int, creditsMinted: Double) -> String {
+        switch self {
+        case .inProgress:
+            return "IN PROGRESS"
+        case .pending:
+            return "PENDING AUDIT"
+        case .approved, .arbitratedApproved:
+            return String(format: "APPROVED (+%0.1fc)", CreditMath.normalize(creditsMinted))
+        case .rejected:
+            if denialCount >= GeminiAuditPolicy.rejectionsBeforeAppeal {
+                return "READY FOR PRO ARBITRATION"
+            }
+            let attempt = max(1, min(denialCount, GeminiAuditPolicy.rejectionsBeforeAppeal))
+            return "REJECTED (Attempt \(attempt)/\(GeminiAuditPolicy.rejectionsBeforeAppeal))"
+        case .appealed:
+            return "PRO ARBITRATION"
+        case .sealedRejected:
+            return "SEALED"
+        case .abandoned:
+            return "ABANDONED"
+        }
+    }
 }
 
 /// One of the three mandatory evidence payloads.
@@ -208,6 +241,11 @@ public enum OfflineMeetingError: Error, Equatable, Sendable {
     case excessiveSleep(sleepSeconds: TimeInterval, awakeSeconds: TimeInterval, duration: TimeInterval)
     case duplicateArtifact(MeetingArtifactKind)
     case artifactHashMismatch(MeetingArtifactKind)
+    case meetingNotFound
+    case meetingSealed
+    case appealLocked(denialCount: Int)
+    case appealStatementEmpty
+    case alreadyResolved
 }
 
 extension OfflineMeetingError: LocalizedError {
@@ -251,6 +289,16 @@ extension OfflineMeetingError: LocalizedError {
             return "\(kind.displayName) SHA-256 was already used by another meeting."
         case .artifactHashMismatch(let kind):
             return "\(kind.displayName) on disk no longer matches the stored SHA-256 digest."
+        case .meetingNotFound:
+            return "That offline meeting was not found."
+        case .meetingSealed:
+            return "This meeting is permanently sealed. Further submissions and appeals are blocked."
+        case .appealLocked(let count):
+            return "Appeal to Gemini Pro unlocks after \(GeminiAuditPolicy.rejectionsBeforeAppeal) consecutive rejections (currently \(count))."
+        case .appealStatementEmpty:
+            return "Appeal explanation is empty after sanitization."
+        case .alreadyResolved:
+            return "This meeting has already been resolved."
         }
     }
 
@@ -282,6 +330,8 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
     public var auditStatus: OfflineMeetingAuditStatus
     public var denialCount: Int
     public var aiReasoning: String?
+    public var detectedInconsistencies: [String]
+    public var appealStatement: String?
     public var creditsMinted: Double
     public var createdAt: Date
 
@@ -307,6 +357,8 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
         auditStatus: OfflineMeetingAuditStatus = .inProgress,
         denialCount: Int = 0,
         aiReasoning: String? = nil,
+        detectedInconsistencies: [String] = [],
+        appealStatement: String? = nil,
         creditsMinted: Double = 0,
         createdAt: Date
     ) {
@@ -331,8 +383,27 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
         self.auditStatus = auditStatus
         self.denialCount = denialCount
         self.aiReasoning = aiReasoning
+        self.detectedInconsistencies = detectedInconsistencies
+        self.appealStatement = appealStatement
         self.creditsMinted = CreditMath.normalize(creditsMinted)
         self.createdAt = createdAt
+    }
+
+    public var liveAuditCaption: String {
+        auditStatus.liveCaption(denialCount: denialCount, creditsMinted: creditsMinted)
+    }
+
+    public var canAppealToPro: Bool {
+        auditStatus == .rejected && denialCount == GeminiAuditPolicy.rejectionsBeforeAppeal
+    }
+
+    public var canRetryFlashAudit: Bool {
+        switch auditStatus {
+        case .rejected:
+            return denialCount > 0 && denialCount < GeminiAuditPolicy.rejectionsBeforeAppeal
+        case .pending, .inProgress, .approved, .appealed, .arbitratedApproved, .sealedRejected, .abandoned:
+            return false
+        }
     }
 
     public var isRecording: Bool {

@@ -23,6 +23,10 @@ enum ZoidLockInAppEntry {
             renderOfflineMeetingProofAndExit()
             return
         }
+        if CommandLine.arguments.contains("--render-gemini-audit-proof") {
+            renderGeminiAuditProofAndExit()
+            return
+        }
         ZoidLockInMenuBarApp.main()
     }
 
@@ -77,6 +81,19 @@ enum ZoidLockInAppEntry {
             exit(1)
         }
     }
+
+    @MainActor
+    private static func renderGeminiAuditProofAndExit() {
+        do {
+            try GeminiAuditProofRenderer.renderPNG()
+            FileHandle.standardError.write(
+                Data("Wrote \(GeminiAuditProofRenderer.defaultProofURL.path)\n".utf8)
+            )
+        } catch {
+            FileHandle.standardError.write(Data("Gemini audit proof render failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
 }
 
 struct ZoidLockInMenuBarApp: App {
@@ -91,7 +108,9 @@ struct ZoidLockInMenuBarApp: App {
                 onPunchToggle: session.punchToggle,
                 onSubmitMeeting: session.submitMeeting,
                 onAbandonMeeting: session.abandonMeeting,
-                onImportArtifact: session.importArtifact
+                onImportArtifact: session.importArtifact,
+                onRetryAudit: session.retryMeetingAudit,
+                onAppeal: session.appealMeeting
             )
         } label: {
             MenuBarTickerLabel(snapshot: session.snapshot)
@@ -110,6 +129,7 @@ final class MenuBarSession: ObservableObject {
     private let marketplaceCoordinator: MarketplaceCoordinator
     private let shield: MobileShieldCoordinator
     private let meetings: OfflineSessionCoordinator
+    private let auditor: OfflineMeetingAuditCoordinator
     private let purge: MeetingArtifactPurgeScheduler
     private let client: XPCEnforcementClient
     private let economyQueue: DispatchQueue
@@ -159,6 +179,13 @@ final class MenuBarSession: ObservableObject {
             timeTravel: timeTravel
         )
         meetings.bindFocusEngine(engine)
+        let auditor = OfflineMeetingAuditCoordinator(
+            store: resolved,
+            artifacts: artifactStore,
+            engine: engine,
+            client: GeminiAuditClient(),
+            session: meetings
+        )
         let purge = MeetingArtifactPurgeScheduler(
             store: resolved,
             artifacts: artifactStore
@@ -169,6 +196,7 @@ final class MenuBarSession: ObservableObject {
         self.marketplaceCoordinator = marketplaceCoordinator
         self.shield = shield
         self.meetings = meetings
+        self.auditor = auditor
         self.purge = purge
         self.client = client
         self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
@@ -251,12 +279,52 @@ final class MenuBarSession: ObservableObject {
     }
 
     func submitMeeting() {
-        do {
-            _ = try meetings.submit()
-        } catch {
-            _ = error
+        Task {
+            do {
+                let record = try meetings.submit()
+                meeting = meetings.snapshot()
+                _ = try await auditor.auditFlash(meetingID: record.id)
+            } catch {
+                _ = error
+            }
+            refreshAfterAudit()
         }
+    }
+
+    func retryMeetingAudit() {
+        guard let id = meetings.activeMeeting?.id ?? meeting.meetingID else { return }
+        Task {
+            do {
+                _ = try await auditor.retryFlash(meetingID: id)
+            } catch {
+                _ = error
+            }
+            refreshAfterAudit()
+        }
+    }
+
+    func appealMeeting(_ statement: String) {
+        guard let id = meetings.activeMeeting?.id ?? meeting.meetingID else { return }
+        Task {
+            do {
+                _ = try await auditor.appealToPro(meetingID: id, statement: statement)
+            } catch {
+                _ = error
+            }
+            refreshAfterAudit()
+        }
+    }
+
+    private func refreshAfterAudit() {
         meeting = meetings.snapshot()
+        if let next = try? marketplaceCoordinator.engine.snapshot() {
+            snapshot = next
+            marketplace = marketplaceCoordinator.assemble(
+                ticker: next,
+                status: nil,
+                mobileShield: marketplace.mobileShield
+            )
+        }
     }
 
     func abandonMeeting() {

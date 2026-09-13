@@ -174,7 +174,8 @@ final class SQLiteDatabase: @unchecked Sendable {
     private func mappedError(_ code: Int32) -> EconomicLedgerError {
         let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "SQLite error"
         if message.localizedCaseInsensitiveContains("append-only")
-            || message.localizedCaseInsensitiveContains("immutable") {
+            || message.localizedCaseInsensitiveContains("immutable")
+            || message.localizedCaseInsensitiveContains("audit is sealed") {
             return .appendOnly
         }
         return .sqlite(code: code, message: message)

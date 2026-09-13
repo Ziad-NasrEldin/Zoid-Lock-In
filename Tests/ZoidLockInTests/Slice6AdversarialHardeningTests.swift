@@ -482,14 +482,16 @@ struct Slice6AdversarialHardeningTests {
         } catch let error as EconomicLedgerError {
             #expect(error == .appendOnly)
         }
-        do {
-            try ledger.executeUncheckedSQL(
-                "UPDATE offline_meetings SET audit_status = 'APPROVED', credits_minted = 4.0 WHERE id = '\(submitted.id.uuidString)';"
-            )
-            Issue.record("status/credit UPDATE after submit must fail")
-        } catch let error as EconomicLedgerError {
-            #expect(error == .appendOnly)
-        }
+        try ledger.executeUncheckedSQL(
+            """
+            UPDATE offline_meetings
+               SET audit_status = 'REJECTED',
+                   denial_count = 1,
+                   ai_reasoning = 'flash-reject',
+                   credits_minted = 0.0
+             WHERE id = '\(submitted.id.uuidString)';
+            """
+        )
         do {
             try ledger.executeUncheckedSQL(
                 "DELETE FROM offline_meetings WHERE id = '\(submitted.id.uuidString)';"
@@ -505,7 +507,9 @@ struct Slice6AdversarialHardeningTests {
         let kept = try #require(try ledger.meeting(id: submitted.id))
         #expect(kept.durationSeconds == submitted.durationSeconds)
         #expect(kept.photoSHA256 == submitted.photoSHA256)
-        #expect(kept.auditStatus == .pending)
+        #expect(kept.auditStatus == .rejected)
+        #expect(kept.denialCount == 1)
+        #expect(kept.aiReasoning == "flash-reject")
         #expect(kept.creditsMinted == 0)
         #expect(kept.notesLocalPath == nil)
     }

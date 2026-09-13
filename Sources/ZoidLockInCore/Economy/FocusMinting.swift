@@ -91,3 +91,10 @@ public enum FocusMinting: Sendable {
         calendar.component(.hour, from: date) < 12
     }
 }
+
+/// Verified offline-meeting yield. Same 0.5 / 30 min (1.0 / hour) rate as digital focus.
+public enum MeetingCreditMinting: Sendable {
+    public static func credits(durationSeconds: TimeInterval) -> Double {
+        FocusMinting.baseCredits(elapsedSeconds: durationSeconds)
+    }
+}

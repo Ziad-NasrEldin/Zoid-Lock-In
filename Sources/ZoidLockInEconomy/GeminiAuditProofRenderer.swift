@@ -2,29 +2,32 @@ import AppKit
 import SwiftUI
 import ZoidLockInCore
 
-public enum OfflineMeetingProofError: Error, Equatable, Sendable {
+public enum GeminiAuditProofError: Error, Equatable, Sendable {
     case renderFailed
 }
 
-/// Renders `OfflineMeetingPopoverView` to a high-resolution PNG without showing a window.
-public enum OfflineMeetingProofRenderer: Sendable {
+/// Renders the Slice 7 Gemini audit / Pro arbitration meeting sheet to PNG.
+public enum GeminiAuditProofRenderer: Sendable {
     public static let canvasSize = CGSize(width: 440, height: 860)
     public static let defaultScale: CGFloat = 3
 
     public static let defaultProofURL = URL(
-        fileURLWithPath: "/Users/ziadnasreldin/Work/GitHub/Zoid Lock In/screenshots/offline_meeting_proof.png"
+        fileURLWithPath: "/Users/ziadnasreldin/Work/GitHub/Zoid Lock In/screenshots/gemini_audit_proof.png"
     )
 
     @MainActor
     public static func renderPNG(
-        snapshot: OfflineMeetingSnapshot = .proof,
+        snapshot: OfflineMeetingSnapshot = .geminiAuditProof,
         to url: URL = defaultProofURL,
         scale: CGFloat = defaultScale
     ) throws {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
-        let view = OfflineMeetingPopoverView(snapshot: snapshot)
+        let view = OfflineMeetingPopoverView(
+            snapshot: snapshot,
+            onAppeal: { _ in }
+        )
         let hosting = NSHostingView(rootView: view)
         hosting.appearance = NSAppearance(named: .aqua)
         hosting.frame = NSRect(origin: .zero, size: canvasSize)
@@ -44,13 +47,13 @@ public enum OfflineMeetingProofRenderer: Sendable {
             bytesPerRow: 0,
             bitsPerPixel: 0
         ) else {
-            throw OfflineMeetingProofError.renderFailed
+            throw GeminiAuditProofError.renderFailed
         }
         bitmap.size = canvasSize
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
 
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
-            throw OfflineMeetingProofError.renderFailed
+            throw GeminiAuditProofError.renderFailed
         }
 
         try FileManager.default.createDirectory(

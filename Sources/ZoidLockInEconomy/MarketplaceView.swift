@@ -10,6 +10,8 @@ public struct MenuBarExtraView: View {
     public var onSubmitMeeting: (() -> Void)?
     public var onAbandonMeeting: (() -> Void)?
     public var onImportArtifact: ((MeetingArtifactKind, URL) -> Void)?
+    public var onRetryAudit: (() -> Void)?
+    public var onAppeal: ((String) -> Void)?
 
     @State private var surface: MenuBarCompanionSurface = .market
 
@@ -20,7 +22,9 @@ public struct MenuBarExtraView: View {
         onPunchToggle: (() -> Void)? = nil,
         onSubmitMeeting: (() -> Void)? = nil,
         onAbandonMeeting: (() -> Void)? = nil,
-        onImportArtifact: ((MeetingArtifactKind, URL) -> Void)? = nil
+        onImportArtifact: ((MeetingArtifactKind, URL) -> Void)? = nil,
+        onRetryAudit: (() -> Void)? = nil,
+        onAppeal: ((String) -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.meeting = meeting
@@ -29,6 +33,8 @@ public struct MenuBarExtraView: View {
         self.onSubmitMeeting = onSubmitMeeting
         self.onAbandonMeeting = onAbandonMeeting
         self.onImportArtifact = onImportArtifact
+        self.onRetryAudit = onRetryAudit
+        self.onAppeal = onAppeal
     }
 
     public var body: some View {
@@ -43,7 +49,9 @@ public struct MenuBarExtraView: View {
                         onPunchToggle: onPunchToggle,
                         onSubmit: onSubmitMeeting,
                         onAbandon: onAbandonMeeting,
-                        onImportArtifact: onImportArtifact
+                        onImportArtifact: onImportArtifact,
+                        onRetryAudit: onRetryAudit,
+                        onAppeal: onAppeal
                     )
                 }
             }

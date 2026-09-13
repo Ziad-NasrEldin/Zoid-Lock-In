@@ -117,6 +117,47 @@ public final class ExchangeEngine: @unchecked Sendable {
         withLock { offlineMeetingRecording = false }
     }
 
+    /// Clock-tamper gate used by the Gemini audit coordinator before minting.
+    public func ensureEconomyWritable() throws {
+        try withLock {
+            try observeClocksLocked()
+            try ensureWritableLocked()
+        }
+    }
+
+    /// Idempotent `EARNED_MEETING` mint. Returns `nil` when duration is under 30 minutes.
+    @discardableResult
+    public func mintEarnedMeeting(meetingID: UUID, durationSeconds: TimeInterval) throws -> WalletTransaction? {
+        try withLock {
+            try observeClocksLocked()
+            try ensureWritableLocked()
+            let amount = MeetingCreditMinting.credits(durationSeconds: durationSeconds)
+            let reference = meetingID.uuidString
+            if let existing = try ledger.allTransactions().first(where: {
+                $0.transactionType == .earnedMeeting && $0.referenceID == reference
+            }) {
+                return existing
+            }
+            guard amount > 0 else {
+                return nil
+            }
+            return try ledger.performAtomically {
+                let balance = try ledger.latestBalance()
+                let next = CreditMath.normalize(balance + amount)
+                let transaction = WalletTransaction(
+                    timestamp: wallClock.now(),
+                    amount: amount,
+                    balanceAfter: next,
+                    transactionType: .earnedMeeting,
+                    referenceID: reference,
+                    description: "EARNED_MEETING +\(CreditMath.normalize(amount)) (\(Int(durationSeconds.rounded(.down)))s)"
+                )
+                try ledger.appendTransaction(transaction)
+                return transaction
+            }
+        }
+    }
+
     public func wallTime() -> Date {
         wallClock.now()
     }
@@ -370,7 +411,7 @@ public final class ExchangeEngine: @unchecked Sendable {
             let dayTransactions = try ledger.transactions(onLocalDay: day, clock: civilClock)
             let earned = CreditMath.normalize(
                 dayTransactions
-                    .filter { $0.transactionType == .mint }
+                    .filter(\.transactionType.countsAsDailyEarned)
                     .reduce(0) { $0 + $1.amount }
             )
             let spentGross = CreditMath.normalize(

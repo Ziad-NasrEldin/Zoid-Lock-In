@@ -13,8 +13,9 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                     receipt_image_sha256, photo_image_sha256, notes_local_path,
                     receipt_local_path, photo_local_path, artifacts_purge_date,
                     artifacts_purged_at, audit_status, denial_count, ai_reasoning,
+                    detected_inconsistencies, appeal_statement,
                     credits_minted, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     punch_in_time = excluded.punch_in_time,
                     punch_out_time = excluded.punch_out_time,
@@ -36,6 +37,8 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                     audit_status = excluded.audit_status,
                     denial_count = excluded.denial_count,
                     ai_reasoning = excluded.ai_reasoning,
+                    detected_inconsistencies = excluded.detected_inconsistencies,
+                    appeal_statement = excluded.appeal_statement,
                     credits_minted = excluded.credits_minted,
                     created_at = excluded.created_at;
                 """,
@@ -101,6 +104,7 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                receipt_image_sha256, photo_image_sha256, notes_local_path,
                receipt_local_path, photo_local_path, artifacts_purge_date,
                artifacts_purged_at, audit_status, denial_count, ai_reasoning,
+               detected_inconsistencies, appeal_statement,
                credits_minted, created_at
         FROM offline_meetings
         """
@@ -156,6 +160,8 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
             .text(record.auditStatus.rawValue),
             .integer(Int64(record.denialCount)),
             record.aiReasoning.map(SQLiteValue.text) ?? .null,
+            .text(Self.encodeStringArray(record.detectedInconsistencies)),
+            record.appealStatement.map(SQLiteValue.text) ?? .null,
             .double(record.creditsMinted),
             .text(LedgerISO8601.string(from: record.createdAt)),
         ]
@@ -204,9 +210,60 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
             auditStatus: status,
             denialCount: Int(int(row["denial_count"])),
             aiReasoning: text(row["ai_reasoning"]),
+            detectedInconsistencies: decodeStringArray(row["detected_inconsistencies"]),
+            appealStatement: text(row["appeal_statement"]),
             creditsMinted: double(row["credits_minted"]),
             createdAt: created
         )
+    }
+
+    public func applyAuditLifecycle(_ record: OfflineMeetingRecord) throws {
+        try performAtomically {
+            let rows = try database.query(
+                "SELECT id FROM offline_meetings WHERE id = ? LIMIT 1;",
+                [.text(record.id.uuidString)]
+            )
+            guard !rows.isEmpty else {
+                throw OfflineMeetingError.meetingNotFound
+            }
+            try database.execute(
+                """
+                UPDATE offline_meetings
+                   SET audit_status = ?,
+                       denial_count = ?,
+                       ai_reasoning = ?,
+                       detected_inconsistencies = ?,
+                       appeal_statement = ?,
+                       credits_minted = ?
+                 WHERE id = ?;
+                """,
+                [
+                    .text(record.auditStatus.rawValue),
+                    .integer(Int64(record.denialCount)),
+                    record.aiReasoning.map(SQLiteValue.text) ?? .null,
+                    .text(Self.encodeStringArray(record.detectedInconsistencies)),
+                    record.appealStatement.map(SQLiteValue.text) ?? .null,
+                    .double(record.creditsMinted),
+                    .text(record.id.uuidString),
+                ]
+            )
+        }
+    }
+
+    private static func encodeStringArray(_ items: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(items),
+              let text = String(data: data, encoding: .utf8)
+        else {
+            return "[]"
+        }
+        return text
+    }
+
+    private static func decodeStringArray(_ value: SQLiteValue?) -> [String] {
+        guard case let .text(text)? = value, let data = text.data(using: .utf8) else {
+            return []
+        }
+        return (try? JSONDecoder().decode([String].self, from: data)) ?? []
     }
 
     private static func text(_ value: SQLiteValue?) -> String? {
