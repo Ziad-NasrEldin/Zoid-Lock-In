@@ -33,6 +33,22 @@ public struct LocalCivilClock: Sendable {
             ?? date.addingTimeInterval(-24 * 3600)
     }
 
+    public func nextDay(_ date: Date) -> Date {
+        calendar.date(byAdding: .day, value: 1, to: startOfDay(date))
+            ?? date.addingTimeInterval(24 * 3600)
+    }
+
+    public func date(fromDayKey dayKey: String, hour: Int = 12, minute: Int = 0, second: Int = 0) -> Date? {
+        let parts = dayKey.split(separator: "-").compactMap { Int($0) }
+        guard parts.count == 3 else { return nil }
+        return date(year: parts[0], month: parts[1], day: parts[2], hour: hour, minute: minute, second: second)
+    }
+
+    public func nextDayKey(_ dayKey: String) -> String? {
+        guard let date = date(fromDayKey: dayKey) else { return nil }
+        return self.dayKey(nextDay(date))
+    }
+
     public func isFriday(_ date: Date) -> Bool {
         calendar.component(.weekday, from: date) == 6
     }

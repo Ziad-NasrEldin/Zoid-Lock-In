@@ -39,20 +39,24 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
 
     public func performAtomically<T>(_ body: () throws -> T) throws -> T {
         try withLock {
-            try database.execute("BEGIN IMMEDIATE;")
+            try database.beginImmediate()
             do {
                 let result = try body()
-                try database.execute("COMMIT;")
+                try database.commit()
                 return result
             } catch {
-                try? database.execute("ROLLBACK;")
+                try? database.rollback()
                 throw error
             }
         }
     }
 
+    public var isInWriteTransaction: Bool {
+        database.isInWriteTransaction
+    }
+
     public func appendTransaction(_ transaction: WalletTransaction) throws {
-        try withLock {
+        try performAtomically {
             do {
                 try database.execute(
                     """
@@ -102,7 +106,7 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
     }
 
     public func upsertFocusSession(_ session: FocusSessionRecord) throws {
-        try withLock {
+        try performAtomically {
             try database.execute(
                 """
                 INSERT INTO focus_sessions (
@@ -149,7 +153,7 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
     }
 
     public func insertReconciliation(_ record: DailyReconciliationRecord) throws {
-        try withLock {
+        try performAtomically {
             do {
                 try database.execute(
                     """
@@ -215,7 +219,7 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
     }
 
     public func saveVault(_ vault: LifetimeVaultRecord) throws {
-        try withLock {
+        try performAtomically {
             try database.execute(
                 """
                 UPDATE lifetime_vault

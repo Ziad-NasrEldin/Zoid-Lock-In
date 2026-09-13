@@ -5,7 +5,7 @@ import NetworkExtension
 import ZoidLockInCore
 
 /// System-extension `NEFilterDataProvider` that drops outbound TCP and UDP flows
-/// to blacklisted domains unless a daemon-published pass is active.
+/// to blacklisted domains unless a **kind-scoped** daemon pass relaxes them.
 ///
 /// This class is the Network Extension **principal class**. It must not be
 /// hosted in the LaunchDaemon. Filter status is **query-only**: inject a
@@ -100,10 +100,10 @@ public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Senda
         port: UInt16?,
         transport: TransportProtocol,
         policy: EnforcementPolicy,
-        passIsActive: Bool = false
+        activePassKind: PassKind? = nil
     ) -> NEFilterNewFlowVerdict {
         mapVerdict(
-            FilterFlowEvaluator(policy: policy, passIsActive: passIsActive).verdict(
+            FilterFlowEvaluator(policy: policy, activePassKind: activePassKind).verdict(
                 for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
             )
         )

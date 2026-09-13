@@ -334,6 +334,7 @@ final class EngineHarness: @unchecked Sendable {
             ledger: ledger,
             incidentStore: incidents,
             clock: mono,
+            focusClock: mono,
             wallClock: wall,
             activityDetector: activity,
             timeZone: timeZone

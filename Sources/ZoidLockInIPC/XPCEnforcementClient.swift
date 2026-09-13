@@ -124,6 +124,36 @@ public final class XPCEnforcementClient: NSObject, ZoidLockInEnforcementServicin
         }
     }
 
+    public func queryUnleviedEmergencyIncidents() async throws -> [EmergencyIncidentRecord] {
+        try await withCheckedThrowingContinuation { continuation in
+            guard let proxy = remoteProxy(continuation: continuation) else { return }
+            proxy.queryUnleviedEmergencyIncidents { data, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                guard let data else {
+                    continuation.resume(
+                        throwing: ZoidLockInXPCError.make(3, message: "Missing incident payload")
+                    )
+                    return
+                }
+                do {
+                    let records = try JSONDecoder().decode([EmergencyIncidentRecord].self, from: data)
+                    continuation.resume(returning: records)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    public func markEmergencyIncidentLevied(uuid: UUID) async throws {
+        try await invoke { proxy, reply in
+            proxy.markEmergencyIncidentLeviedWithUUID(uuid.uuidString, withReply: reply)
+        }
+    }
+
     private func invoke(
         _ body: @escaping (any ZoidLockInEnforcementXPC, @escaping (NSError?) -> Void) -> Void
     ) async throws {

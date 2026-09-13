@@ -7,6 +7,32 @@ public enum PassKind: String, Sendable, Equatable, Codable {
     case streaming
     case gaming
     case emergency
+
+    /// Domains this pass may whitelist. Empty means no network relax (gaming).
+    public var relaxedDomainSuffixes: [String] {
+        switch self {
+        case .emergency:
+            return DomainFilterRules.defaultBlacklist
+        case .food:
+            return DomainFilterRules.foodDeliverySuffixes
+        case .phone:
+            return DomainFilterRules.communicationSuffixes
+        case .streaming:
+            return DomainFilterRules.streamingSuffixes
+        case .gaming:
+            return []
+        }
+    }
+
+    /// Emergency and gaming pause process kills; other kinds keep the sentinel hard.
+    public var relaxesProcessTermination: Bool {
+        switch self {
+        case .emergency, .gaming:
+            return true
+        case .food, .phone, .streaming:
+            return false
+        }
+    }
 }
 
 /// Stub voucher type for Slice 4 ledger passes. Slice 2 always rejects amenity

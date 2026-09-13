@@ -90,6 +90,28 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         incidentStore.allIncidents()
     }
 
+    public func queryUnleviedEmergencyIncidents() async throws -> [EmergencyIncidentRecord] {
+        incidentStore.unleviedIncidents()
+    }
+
+    public func markEmergencyIncidentLevied(uuid: UUID) async throws {
+        try incidentStore.markLevied(id: uuid)
+    }
+
+    /// Installs a kind-scoped daemon-local pass without voucher verification.
+    /// Not an XPC entry; amenity `openPass` still throws `amenityPassRequiresVoucher`.
+    public func commitKindScopedPass(kind: PassKind, durationSeconds: TimeInterval) {
+        let now = clock.nowSeconds()
+        withLock {
+            passController.active = DaemonLocalPass(
+                kind: kind,
+                startedAtSeconds: now,
+                durationSeconds: durationSeconds
+            )
+        }
+        publishEffectivePolicy(at: now)
+    }
+
     /// Direct policy mutation used at boot and by tests. Not an XPC entry point.
     public func applyPolicy(_ policy: EnforcementPolicy) {
         withLock { basePolicy = policy }
@@ -290,7 +312,7 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     }
 
     private func publishEffectivePolicy(at time: TimeInterval) {
-        let next = withLock { () -> (EnforcementPolicy, FilterEnforcementSnapshot) in
+        let next = withLock { () -> (EnforcementPolicy, FilterEnforcementSnapshot, PassKind?) in
             let clockNow = clock.nowSeconds()
             if let last = lastObservedMonotonicSeconds, clockNow + 0.000_001 < last {
                 passController.revoke()
@@ -308,8 +330,8 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
             }
 
             var policy = basePolicy
-            if passActive {
-                policy = basePolicy.relaxingForActivePass()
+            if passActive, let kind = pass?.kind {
+                policy = basePolicy.overlay(for: kind)
             } else {
                 policy.mode = .hard
             }
@@ -323,9 +345,9 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
                 remainingPassSeconds: remaining,
                 isLockedDown: !passActive
             )
-            return (policy, snapshot)
+            return (policy, snapshot, passActive ? pass?.kind : nil)
         }
-        processSentinel.apply(next.0)
+        processSentinel.apply(next.0, passKind: next.2)
         filterPolicyHub.publish(next.1)
         filterStatusSink?.publish(next.1)
     }

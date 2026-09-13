@@ -14,6 +14,8 @@ public protocol ZoidLockInEnforcementXPC: NSObjectProtocol {
     func queryStatus(withReply reply: @escaping (Data?, NSError?) -> Void)
     func engageEmergencySafetyValve(withReply reply: @escaping (NSError?) -> Void)
     func heartbeat(withReply reply: @escaping (NSError?) -> Void)
+    func queryUnleviedEmergencyIncidents(withReply reply: @escaping (Data?, NSError?) -> Void)
+    func markEmergencyIncidentLeviedWithUUID(_ uuid: String, withReply reply: @escaping (NSError?) -> Void)
 }
 
 public enum ZoidLockInXPCError {

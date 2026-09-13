@@ -6,10 +6,11 @@ public protocol ActivityDetecting: Sendable {
     func secondsSinceLastPhysicalEvent() -> TimeInterval
 }
 
-/// `CGEventSource.secondsSinceLastEventType` over the combined session.
+/// `CGEventSource.secondsSinceLastEventType` over HID system state.
 ///
 /// Uses `kCGAnyInputEventType` so keyboard, mouse, tablet, and other HID
-/// sources all count as human activity.
+/// sources all count as human activity. `.hidSystemState` is a stopgap vs
+/// combined session state; USB jigglers remain an accepted residual risk.
 public struct CGEventIdleMonitor: ActivityDetecting {
     private static let anyInputEventType = CGEventType(rawValue: UInt32.max)!
 
@@ -17,7 +18,7 @@ public struct CGEventIdleMonitor: ActivityDetecting {
 
     public init(
         secondsSinceLastEvent: @escaping @Sendable (CGEventType) -> TimeInterval = { eventType in
-            CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: eventType)
+            CGEventSource.secondsSinceLastEventType(.hidSystemState, eventType: eventType)
         }
     ) {
         self.secondsSinceLastEvent = secondsSinceLastEvent

@@ -138,9 +138,9 @@ struct FilterFlowEvaluatorTests {
         )
     }
 
-    @Test("active pass allows blacklisted and unverified inspected flows")
+    @Test("active emergency pass allows blacklisted and unverified inspected flows")
     func activePassAllowsInspectedFlows() {
-        let evaluator = FilterFlowEvaluator(policy: .lockedDown, passIsActive: true)
+        let evaluator = FilterFlowEvaluator(policy: .lockedDown, activePassKind: .emergency)
         #expect(
             evaluator.verdict(
                 for: FilterFlowRequest(hostname: "youtube.com", port: 443, transport: .udp)

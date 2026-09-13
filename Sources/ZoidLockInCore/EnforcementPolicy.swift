@@ -33,15 +33,40 @@ public struct EnforcementPolicy: Sendable, Equatable {
 
     public static let lockedDown = EnforcementPolicy()
 
-    /// Emergency / amenity overlay: whitelist every blacklisted suffix and pause kills.
+    /// Emergency overlay: whitelist every blacklisted suffix and pause kills.
     public func relaxingForActivePass() -> EnforcementPolicy {
-        EnforcementPolicy(
-            domainRules: domainRules.withWhitelist(domainRules.blacklistedSuffixes),
-            processMatcher: processMatcher,
-            processScanIntervalSeconds: processScanIntervalSeconds,
-            inspectedPorts: inspectedPorts,
-            mode: .soft
-        )
+        overlay(for: .emergency)
+    }
+
+    /// Kind-scoped overlay. Food/phone/streaming keep process kills; gaming
+    /// pauses kills without opening food or streaming domains.
+    public func overlay(for kind: PassKind) -> EnforcementPolicy {
+        switch kind {
+        case .emergency:
+            return EnforcementPolicy(
+                domainRules: domainRules.withWhitelist(domainRules.blacklistedSuffixes),
+                processMatcher: processMatcher,
+                processScanIntervalSeconds: processScanIntervalSeconds,
+                inspectedPorts: inspectedPorts,
+                mode: .soft
+            )
+        case .food, .phone, .streaming:
+            return EnforcementPolicy(
+                domainRules: domainRules.allowing(suffixes: kind.relaxedDomainSuffixes),
+                processMatcher: processMatcher,
+                processScanIntervalSeconds: processScanIntervalSeconds,
+                inspectedPorts: inspectedPorts,
+                mode: .hard
+            )
+        case .gaming:
+            return EnforcementPolicy(
+                domainRules: domainRules,
+                processMatcher: processMatcher,
+                processScanIntervalSeconds: processScanIntervalSeconds,
+                inspectedPorts: inspectedPorts,
+                mode: .soft
+            )
+        }
     }
 
     /// True for HTTP, HTTPS, HTTP/3 (UDP/443), and common local proxy ports.
@@ -53,9 +78,9 @@ public struct EnforcementPolicy: Sendable, Equatable {
         hostname: String?,
         port: UInt16?,
         transport: TransportProtocol,
-        passIsActive: Bool = false
+        activePassKind: PassKind? = nil
     ) -> FilterVerdict {
-        FilterFlowEvaluator(policy: self, passIsActive: passIsActive).verdict(
+        FilterFlowEvaluator(policy: self, activePassKind: activePassKind).verdict(
             for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
         )
     }

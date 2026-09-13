@@ -12,6 +12,27 @@ public struct DomainFilterRules: Sendable, Equatable {
     public let blacklistedSuffixes: [String]
     public let whitelistedSuffixes: [String]
 
+    public static let foodDeliverySuffixes: [String] = [
+        "talabat.com",
+        "deliveroo.com",
+        "ubereats.com",
+        "elmenus.com",
+    ]
+
+    public static let communicationSuffixes: [String] = [
+        "whatsapp.com",
+        "web.whatsapp.com",
+        "telegram.org",
+        "t.me",
+    ]
+
+    public static let streamingSuffixes: [String] = [
+        "youtube.com",
+        "youtu.be",
+        "netflix.com",
+        "twitch.tv",
+    ]
+
     public static let defaultBlacklist: [String] = [
         "youtube.com",
         "youtu.be",
@@ -27,6 +48,10 @@ public struct DomainFilterRules: Sendable, Equatable {
         "deliveroo.com",
         "ubereats.com",
         "elmenus.com",
+        "whatsapp.com",
+        "web.whatsapp.com",
+        "telegram.org",
+        "t.me",
     ]
 
     public init(
@@ -65,6 +90,14 @@ public struct DomainFilterRules: Sendable, Equatable {
         DomainFilterRules(
             blacklistedSuffixes: blacklistedSuffixes,
             whitelistedSuffixes: suffixes
+        )
+    }
+
+    /// Unions extra suffixes onto the existing whitelist (kind-scoped passes).
+    public func allowing(suffixes: [String]) -> DomainFilterRules {
+        DomainFilterRules(
+            blacklistedSuffixes: blacklistedSuffixes,
+            whitelistedSuffixes: whitelistedSuffixes + suffixes
         )
     }
 

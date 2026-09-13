@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import ZoidLockInCore
 import ZoidLockInEconomy
+import ZoidLockInIPC
 
 @main
 enum ZoidLockInAppEntry {
@@ -44,27 +45,50 @@ struct ZoidLockInMenuBarApp: App {
 final class MenuBarSession: ObservableObject {
     @Published var snapshot: MenuBarTickerSnapshot
 
-    private let engine: ExchangeEngine
-    private var timer: Timer?
+    private let coordinator: EconomyTickCoordinator
+    private let client: XPCEnforcementClient
+    private let economyQueue: DispatchQueue
+    nonisolated(unsafe) private var timer: DispatchSourceTimer?
 
     init() {
         let ledger = (try? SQLiteEconomicLedger.default()) ?? (try? SQLiteEconomicLedger())
         let resolved = ledger ?? (try! SQLiteEconomicLedger())
-        self.engine = ExchangeEngine(
+        let cache = CachedEmergencyIncidentStore()
+        let engine = ExchangeEngine(
             ledger: resolved,
-            incidentStore: FileEmergencyIncidentStore(
-                directory: FileEmergencyIncidentStore.defaultPrivilegedDirectory
-            )
+            incidentStore: cache,
+            clock: MachContinuousTimeClock(),
+            focusClock: MachUptimeClock()
         )
+        let coordinator = EconomyTickCoordinator(engine: engine, incidentCache: cache)
+        let client = XPCEnforcementClient()
+        client.resume()
+        client.startHeartbeatLoop()
+
+        self.coordinator = coordinator
+        self.client = client
+        self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
         self.snapshot = (try? engine.snapshot()) ?? .proof
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
-            DispatchQueue.main.async {
-                self?.tick()
+
+        let timer = DispatchSource.makeTimerSource(queue: economyQueue)
+        timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
+        timer.setEventHandler { [coordinator, client] in
+            Task {
+                let next = await coordinator.reconcileIncidentsAndTick(
+                    fetchIncidents: { try await client.queryUnleviedEmergencyIncidents() },
+                    markLevied: { try await client.markEmergencyIncidentLevied(uuid: $0) }
+                )
+                await MainActor.run { [weak self] in
+                    self?.snapshot = next
+                }
             }
         }
+        self.timer = timer
+        timer.resume()
     }
 
-    private func tick() {
-        snapshot = (try? engine.tick()) ?? snapshot
+    deinit {
+        timer?.cancel()
+        client.invalidate()
     }
 }

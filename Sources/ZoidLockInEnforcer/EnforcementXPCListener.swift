@@ -143,6 +143,34 @@ public final class EnforcementXPCExporter: NSObject, ZoidLockInEnforcementXPC, @
             }
         }
     }
+
+    public func queryUnleviedEmergencyIncidents(withReply reply: @escaping (Data?, NSError?) -> Void) {
+        let reply = UncheckedSendableStatusReply(reply)
+        Task {
+            do {
+                let incidents = try await service.queryUnleviedEmergencyIncidents()
+                let data = try JSONEncoder().encode(incidents)
+                reply.call(data, nil)
+            } catch {
+                reply.call(nil, error as NSError)
+            }
+        }
+    }
+
+    public func markEmergencyIncidentLeviedWithUUID(_ uuid: String, withReply reply: @escaping (NSError?) -> Void) {
+        let reply = UncheckedSendableClosure(reply)
+        Task {
+            do {
+                guard let id = UUID(uuidString: uuid) else {
+                    throw ZoidLockInXPCError.make(6, message: "Invalid incident UUID")
+                }
+                try await service.markEmergencyIncidentLevied(uuid: id)
+                reply.call(nil)
+            } catch {
+                reply.call(error as NSError)
+            }
+        }
+    }
 }
 
 private struct UncheckedSendableClosure: @unchecked Sendable {

@@ -93,7 +93,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "ZoidLockInApp",
-            dependencies: ["ZoidLockInCore", "ZoidLockInEconomy"],
+            dependencies: ["ZoidLockInCore", "ZoidLockInEconomy", "ZoidLockInIPC"],
             path: "Sources/ZoidLockInApp",
             linkerSettings: [
                 .linkedFramework("SwiftUI"),

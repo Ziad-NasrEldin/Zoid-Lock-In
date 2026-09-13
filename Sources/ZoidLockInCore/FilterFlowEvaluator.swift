@@ -30,21 +30,21 @@ public struct FilterFlowRequest: Sendable, Equatable {
 /// an IP literal. UDP/443 (QUIC / HTTP/3) is inspected with the same rule so it
 /// cannot bypass the TCP-only matcher.
 ///
-/// An active daemon pass (`passIsActive`) allows inspected flows for the
-/// duration of the pass, including unverified hostnames, then the caller must
-/// re-evaluate against lockdown after expiry.
+/// Passes are **kind-scoped**. `.emergency` allows every inspected flow, including
+/// unverified hostnames. Amenity kinds whitelist only their own suffixes;
+/// unrelated blacklisted hosts and unverified identities still drop.
 public struct FilterFlowEvaluator: Sendable, Equatable {
     public var policy: EnforcementPolicy
-    public var passIsActive: Bool
+    public var activePassKind: PassKind?
 
-    public init(policy: EnforcementPolicy = .lockedDown, passIsActive: Bool = false) {
+    public init(policy: EnforcementPolicy = .lockedDown, activePassKind: PassKind? = nil) {
         self.policy = policy
-        self.passIsActive = passIsActive
+        self.activePassKind = activePassKind
     }
 
     public init(snapshot: FilterEnforcementSnapshot) {
         self.policy = snapshot.enforcementPolicy
-        self.passIsActive = snapshot.isPassActive
+        self.activePassKind = snapshot.activePassKind
     }
 
     public func verdict(for request: FilterFlowRequest) -> FilterVerdict {
@@ -52,7 +52,7 @@ public struct FilterFlowEvaluator: Sendable, Equatable {
         case .other:
             return .allow
         case .tcp, .udp:
-            if passIsActive {
+            if activePassKind == .emergency {
                 return .allow
             }
 
@@ -60,7 +60,9 @@ public struct FilterFlowEvaluator: Sendable, Equatable {
                 return .allow
             }
 
-            return policy.domainRules.verdict(forHostname: request.hostname)
+            let extra = activePassKind?.relaxedDomainSuffixes ?? []
+            let rules = policy.domainRules.allowing(suffixes: extra)
+            return rules.verdict(forHostname: request.hostname)
         }
     }
 }

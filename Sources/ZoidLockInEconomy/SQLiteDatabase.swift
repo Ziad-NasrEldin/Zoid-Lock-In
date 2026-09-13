@@ -15,6 +15,7 @@ enum SQLiteValue: Sendable, Equatable {
 final class SQLiteDatabase: @unchecked Sendable {
     private var handle: OpaquePointer?
     private let lock = NSRecursiveLock()
+    private var transactionDepth = 0
 
     init(path: String) throws {
         var db: OpaquePointer?
@@ -39,6 +40,12 @@ final class SQLiteDatabase: @unchecked Sendable {
         handle = nil
     }
 
+    var isInWriteTransaction: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return transactionDepth > 0
+    }
+
     func journalMode() throws -> String {
         let rows = try query("PRAGMA journal_mode;")
         if case let .text(mode)? = rows.first?["journal_mode"] {
@@ -50,15 +57,37 @@ final class SQLiteDatabase: @unchecked Sendable {
         return ""
     }
 
+    /// Starts a reserved write transaction. Nested calls share the outer BEGIN IMMEDIATE.
+    func beginImmediate() throws {
+        try withLock {
+            if transactionDepth == 0 {
+                try executeLocked("BEGIN IMMEDIATE;")
+            }
+            transactionDepth += 1
+        }
+    }
+
+    func commit() throws {
+        try withLock {
+            guard transactionDepth > 0 else { return }
+            transactionDepth -= 1
+            if transactionDepth == 0 {
+                try executeLocked("COMMIT;")
+            }
+        }
+    }
+
+    func rollback() throws {
+        try withLock {
+            guard transactionDepth > 0 else { return }
+            transactionDepth = 0
+            try executeLocked("ROLLBACK;")
+        }
+    }
+
     func execute(_ sql: String, _ parameters: [SQLiteValue] = []) throws {
         try withLock {
-            let statement = try prepare(sql)
-            defer { sqlite3_finalize(statement) }
-            try bind(statement, parameters)
-            let status = sqlite3_step(statement)
-            if status != SQLITE_DONE && status != SQLITE_ROW {
-                throw mappedError(status)
-            }
+            try executeLocked(sql, parameters)
         }
     }
 
@@ -77,6 +106,16 @@ final class SQLiteDatabase: @unchecked Sendable {
                 rows.append(row(statement))
             }
             return rows
+        }
+    }
+
+    private func executeLocked(_ sql: String, _ parameters: [SQLiteValue] = []) throws {
+        let statement = try prepare(sql)
+        defer { sqlite3_finalize(statement) }
+        try bind(statement, parameters)
+        let status = sqlite3_step(statement)
+        if status != SQLITE_DONE && status != SQLITE_ROW {
+            throw mappedError(status)
         }
     }
 

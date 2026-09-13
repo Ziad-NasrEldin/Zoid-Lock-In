@@ -19,6 +19,7 @@ public final class ExchangeEngine: @unchecked Sendable {
     public let civilClock: LocalCivilClock
 
     private let clock: any MonotonicTimeProviding
+    private let focusClock: any MonotonicTimeProviding
     private let wallClock: any WallClockProviding
     private let activityDetector: any ActivityDetecting
     private let timeTravel: TimeTravelGuard
@@ -31,6 +32,7 @@ public final class ExchangeEngine: @unchecked Sendable {
         ledger: any EconomicLedger,
         incidentStore: any EmergencyIncidentStoring = InMemoryEmergencyIncidentStore(),
         clock: any MonotonicTimeProviding = MachContinuousTimeClock(),
+        focusClock: (any MonotonicTimeProviding)? = nil,
         wallClock: any WallClockProviding = SystemWallClock(),
         activityDetector: any ActivityDetecting = CGEventIdleMonitor(),
         timeTravel: TimeTravelGuard = TimeTravelGuard(),
@@ -40,6 +42,7 @@ public final class ExchangeEngine: @unchecked Sendable {
         self.ledger = ledger
         self.incidentStore = incidentStore
         self.clock = clock
+        self.focusClock = focusClock ?? MachUptimeClock()
         self.wallClock = wallClock
         self.activityDetector = activityDetector
         self.timeTravel = timeTravel
@@ -90,17 +93,19 @@ public final class ExchangeEngine: @unchecked Sendable {
             if let liveSession, liveSession.state == .active || liveSession.state == .pausedGrace {
                 throw ExchangeEngineError.focusAlreadyActive
             }
-            if activityDetector.secondsSinceLastPhysicalEvent() >= FocusMinting.interruptionGraceSeconds {
+            if FocusMinting.presence(idleSeconds: activityDetector.secondsSinceLastPhysicalEvent())
+                == .abandoned {
                 throw ExchangeEngineError.sessionAbandoned
             }
 
             let nowWall = wallClock.now()
-            let nowMono = clock.nowSeconds()
+            let nowMono = focusClock.nowSeconds()
+            let idle = activityDetector.secondsSinceLastPhysicalEvent()
             let session = FocusSessionRecord(
                 id: id,
                 startTime: nowWall,
                 elapsedSeconds: 0,
-                state: .active
+                state: FocusMinting.presence(idleSeconds: idle) == .grace ? .pausedGrace : .active
             )
             liveSession = session
             lastTickMonotonic = nowMono
@@ -148,23 +153,25 @@ public final class ExchangeEngine: @unchecked Sendable {
 
             let friday = civilClock.isFriday(now)
             let cost = catalog.cost(of: kind, fridayRestMode: friday)
-            let balance = try ledger.latestBalance()
-            let spendable = CreditMath.spendable(balance)
-            if cost > spendable {
-                throw ExchangeEngineError.insufficientCredits(need: cost, have: spendable)
-            }
+            return try ledger.performAtomically {
+                let balance = try ledger.latestBalance()
+                let spendable = CreditMath.spendable(balance)
+                if cost > spendable {
+                    throw ExchangeEngineError.insufficientCredits(need: cost, have: spendable)
+                }
 
-            let next = CreditMath.normalize(balance - cost)
-            let transaction = WalletTransaction(
-                timestamp: now,
-                amount: -cost,
-                balanceAfter: next,
-                transactionType: .spend,
-                referenceID: kind.rawValue,
-                description: purchaseDescription(kind, cost: cost, fridayRestMode: friday)
-            )
-            try ledger.appendTransaction(transaction)
-            return transaction
+                let next = CreditMath.normalize(balance - cost)
+                let transaction = WalletTransaction(
+                    timestamp: now,
+                    amount: -cost,
+                    balanceAfter: next,
+                    transactionType: .spend,
+                    referenceID: kind.rawValue,
+                    description: purchaseDescription(kind, cost: cost, fridayRestMode: friday)
+                )
+                try ledger.appendTransaction(transaction)
+                return transaction
+            }
         }
     }
 
@@ -189,34 +196,43 @@ public final class ExchangeEngine: @unchecked Sendable {
     private func restoreLiveSession() {
         let sessions = (try? ledger.allFocusSessions()) ?? []
         liveSession = sessions.last(where: { $0.state == .active || $0.state == .pausedGrace })
-        lastTickMonotonic = clock.nowSeconds()
+        lastTickMonotonic = focusClock.nowSeconds()
     }
 
     @discardableResult
     private func reconcileIfNeededLocked() throws -> DailyReconciliationRecord? {
         let now = wallClock.now()
         let yesterday = civilClock.dayKey(civilClock.previousDay(now))
-        if try ledger.reconciliation(onDay: yesterday) != nil {
+        guard let startDay = try firstUnreconciledDay(through: yesterday) else {
             return nil
         }
 
-        let latest = try ledger.latestReconciliationDay()
-        let yesterdayTransactions = try ledger.transactions(onLocalDay: yesterday, clock: civilClock)
-        let yesterdaySessions = try ledger.allFocusSessions().filter {
-            civilClock.dayKey($0.startTime) == yesterday
+        var last: DailyReconciliationRecord?
+        var day = startDay
+        while day <= yesterday {
+            if try ledger.reconciliation(onDay: day) == nil {
+                last = try reconcileLocked(day: day)
+            }
+            guard let next = civilClock.nextDayKey(day) else { break }
+            day = next
         }
-        let levied = (try? ledger.leviedIncidentIDs()) ?? []
-        let incidentsOnYesterday = incidentStore.allIncidents().filter { incident in
-            civilClock.dayKey(incident.utcTimestamp) == yesterday
-                && !levied.contains(incident.id.uuidString)
+        return last
+    }
+
+    private func firstUnreconciledDay(through yesterday: String) throws -> String? {
+        if let latest = try ledger.latestReconciliationDay() {
+            guard let next = civilClock.nextDayKey(latest), next <= yesterday else {
+                return nil
+            }
+            return next
         }
-        if latest == nil
-            && yesterdayTransactions.isEmpty
-            && yesterdaySessions.isEmpty
-            && incidentsOnYesterday.isEmpty {
-            return nil
-        }
-        return try reconcileLocked(day: yesterday)
+
+        var days: [String] = []
+        days.append(contentsOf: try ledger.allTransactions().map { civilClock.dayKey($0.timestamp) })
+        days.append(contentsOf: try ledger.allFocusSessions().map { civilClock.dayKey($0.startTime) })
+        days.append(contentsOf: incidentStore.allIncidents().map { civilClock.dayKey($0.utcTimestamp) })
+        let earliest = days.filter { $0 <= yesterday }.min()
+        return earliest
     }
 
     private func reconcileLocked(day: String) throws -> DailyReconciliationRecord {
@@ -293,11 +309,13 @@ public final class ExchangeEngine: @unchecked Sendable {
             }
 
             let levied = try ledger.leviedIncidentIDs()
-            let unlevied = incidentStore.allIncidents().filter { incident in
-                !levied.contains(incident.id.uuidString)
-            }
+            let unlevied = incidentStore.unleviedIncidents()
             for incident in unlevied {
-                let penalty = CreditMath.normalize(incident.signedDebtCredits)
+                if levied.contains(incident.id.uuidString) {
+                    try incidentStore.markLevied(id: incident.id)
+                    continue
+                }
+                let penalty = PendingDebtRecord.emergencyPenaltyCredits
                 balance = CreditMath.normalize(balance + penalty)
                 try ledger.appendTransaction(
                     WalletTransaction(
@@ -309,6 +327,7 @@ public final class ExchangeEngine: @unchecked Sendable {
                         description: "Emergency safety valve −2.0 credit debt"
                     )
                 )
+                try incidentStore.markLevied(id: incident.id)
             }
 
             let record = DailyReconciliationRecord(
@@ -363,25 +382,26 @@ public final class ExchangeEngine: @unchecked Sendable {
             return
         }
 
-        let nowMono = clock.nowSeconds()
+        let nowMono = focusClock.nowSeconds()
         let idle = activityDetector.secondsSinceLastPhysicalEvent()
         let lastTick = lastTickMonotonic ?? nowMono
 
-        if idle >= FocusMinting.interruptionGraceSeconds {
+        switch FocusMinting.presence(idleSeconds: idle) {
+        case .abandoned:
             session.state = .abandoned
             session.endTime = wallClock.now()
             try ledger.upsertFocusSession(session)
             liveSession = session
             lastTickMonotonic = nowMono
             return
-        }
-
-        if idle > 0 {
+        case .grace:
             session.state = .pausedGrace
             lastTickMonotonic = nowMono
             try ledger.upsertFocusSession(session)
             liveSession = session
             return
+        case .active:
+            break
         }
 
         if session.state == .pausedGrace {
@@ -394,8 +414,10 @@ public final class ExchangeEngine: @unchecked Sendable {
 
         session.elapsedSeconds += max(0, nowMono - lastTick)
         lastTickMonotonic = nowMono
-        try mintUnpaidLocked(&session)
-        try ledger.upsertFocusSession(session)
+        try ledger.performAtomically {
+            try mintUnpaidLocked(&session)
+            try ledger.upsertFocusSession(session)
+        }
         liveSession = session
     }
 
@@ -520,16 +542,14 @@ public final class ExchangeEngine: @unchecked Sendable {
     }
 
     private func isFriday(dayKey: String) -> Bool {
-        let parts = dayKey.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return false }
-        let date = civilClock.date(year: parts[0], month: parts[1], day: parts[2], hour: 12, minute: 0)
+        guard let date = civilClock.date(fromDayKey: dayKey, hour: 12, minute: 0) else {
+            return false
+        }
         return civilClock.isFriday(date)
     }
 
     private func closeTimestamp(forDay day: String) -> Date {
-        let parts = day.split(separator: "-").compactMap { Int($0) }
-        guard parts.count == 3 else { return wallClock.now() }
-        return civilClock.date(year: parts[0], month: parts[1], day: parts[2], hour: 23, minute: 59, second: 59)
+        civilClock.date(fromDayKey: day, hour: 23, minute: 59, second: 59) ?? wallClock.now()
     }
 
     private func purchaseDescription(_ kind: AmenityKind, cost: Double, fridayRestMode: Bool) -> String {

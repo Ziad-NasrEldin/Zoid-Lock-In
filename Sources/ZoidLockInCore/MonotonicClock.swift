@@ -100,6 +100,23 @@ public final class SleepSimulationClock: MonotonicTimeProviding, @unchecked Send
         continuousSeconds += duration
         lock.unlock()
     }
+
+    /// Focus-elapsed adapter: pauses while `simulateSleep` runs.
+    public var uptimeClock: any MonotonicTimeProviding {
+        SleepSimulationUptimeFacade(clock: self)
+    }
+}
+
+private final class SleepSimulationUptimeFacade: MonotonicTimeProviding, @unchecked Sendable {
+    private let clock: SleepSimulationClock
+
+    init(clock: SleepSimulationClock) {
+        self.clock = clock
+    }
+
+    func nowSeconds() -> TimeInterval {
+        clock.uptimeNowSeconds()
+    }
 }
 
 /// Wall clock used only for human-readable incident timestamps, never for expiry.

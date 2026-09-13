@@ -7,11 +7,31 @@ public enum FocusMinting: Sendable {
     public static let morningBlockSeconds: TimeInterval = 90 * 60
     public static let standardMultiplier: Double = 1.0
     public static let morningMomentumMultiplier: Double = 2.0
+    /// Idle at or below this window still counts as active human presence.
+    public static let activePresenceSeconds: TimeInterval = 30
     public static let interruptionGraceSeconds: TimeInterval = 5 * 60
     public static let dailyTargetCredits: Double = 3.0
     public static let deficitStrikeCredits: Double = -1.0
     public static let halfCredit: Double = 0.5
     public static let creditPerHour: Double = 1.0
+
+    public enum Presence: Sendable, Equatable {
+        case active
+        case grace
+        case abandoned
+    }
+
+    /// Dual-threshold idle machine. Typing pauses (`idle <= 30`) stay active;
+    /// `30 < idle < 300` holds elapsed in grace; `idle >= 300` abandons.
+    public static func presence(idleSeconds: TimeInterval) -> Presence {
+        if idleSeconds >= interruptionGraceSeconds {
+            return .abandoned
+        }
+        if idleSeconds > activePresenceSeconds {
+            return .grace
+        }
+        return .active
+    }
 
     public static func baseCredits(elapsedSeconds: TimeInterval) -> Double {
         guard elapsedSeconds >= secondsPerHalfCredit else { return 0 }

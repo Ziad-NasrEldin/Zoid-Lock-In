@@ -15,4 +15,6 @@ public protocol ZoidLockInEnforcementServicing: Sendable {
     func queryStatus() async throws -> EnforcementStatus
     func engageEmergencySafetyValve() async throws
     func heartbeat() async throws
+    func queryUnleviedEmergencyIncidents() async throws -> [EmergencyIncidentRecord]
+    func markEmergencyIncidentLevied(uuid: UUID) async throws
 }

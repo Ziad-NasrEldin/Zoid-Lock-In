@@ -109,6 +109,7 @@ public final class ProcessSentinel: @unchecked Sendable {
     private let lock = NSLock()
     private var matcher: ProcessTargetMatcher
     private var mode: EnforcementMode
+    private var activePassKind: PassKind?
     private var timer: DispatchSourceTimer?
     private var isRunning = false
 
@@ -142,10 +143,17 @@ public final class ProcessSentinel: @unchecked Sendable {
         lock.unlock()
     }
 
-    public func apply(_ policy: EnforcementPolicy) {
+    public func apply(_ policy: EnforcementPolicy, passKind: PassKind? = nil) {
         lock.lock()
         matcher = policy.processMatcher
         mode = policy.mode
+        activePassKind = passKind
+        lock.unlock()
+    }
+
+    public func updatePassKind(_ kind: PassKind?) {
+        lock.lock()
+        activePassKind = kind
         lock.unlock()
     }
 
@@ -187,6 +195,7 @@ public final class ProcessSentinel: @unchecked Sendable {
         lock.lock()
         let activeMatcher = matcher
         let activeMode = mode
+        let passKind = activePassKind
         lock.unlock()
 
         let selfPid = getpid()
@@ -199,7 +208,8 @@ public final class ProcessSentinel: @unchecked Sendable {
                 )
         }
 
-        guard activeMode == .hard else {
+        let relaxKills = passKind?.relaxesProcessTermination == true
+        guard activeMode == .hard, !relaxKills else {
             lock.lock()
             scanCount += 1
             lastTerminatedPIDs = []
