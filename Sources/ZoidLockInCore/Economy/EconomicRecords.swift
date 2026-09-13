@@ -4,6 +4,7 @@ import Foundation
 public enum WalletTransactionType: String, Sendable, Equatable, Codable {
     case mint
     case spend
+    case refund = "refund_amenity"
     case penalty
     case reset
     case surplusTransfer = "surplus_transfer"

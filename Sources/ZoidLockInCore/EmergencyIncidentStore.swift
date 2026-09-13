@@ -241,13 +241,43 @@ public final class FileEmergencyIncidentStore: EmergencyIncidentStoring, @unchec
         URL(fileURLWithPath: defaultDirectoryPath, isDirectory: true)
     }
 
+    /// Production path when `/var/db/zoidlockin` is writable; otherwise a
+    /// user-space directory for tests and unsigned local runs.
+    public static func resolvedDirectory(fileManager: FileManager = .default) -> URL {
+        let privileged = defaultPrivilegedDirectory
+        if canWrite(to: privileged, fileManager: fileManager) {
+            return privileged
+        }
+        let root = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? fileManager.temporaryDirectory
+        let fallback = root
+            .appendingPathComponent(EconomicLedgerLocation.applicationSupportDirectoryName, isDirectory: true)
+            .appendingPathComponent("privileged", isDirectory: true)
+        try? fileManager.createDirectory(at: fallback, withIntermediateDirectories: true)
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fallback.path)
+        return fallback
+    }
+
     public static func makeIsolatedDirectory(
         fileManager: FileManager = .default
     ) -> URL {
         let url = fileManager.temporaryDirectory
             .appendingPathComponent("zoidlockin-\(UUID().uuidString)", isDirectory: true)
         try? fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: url.path)
         return url
+    }
+
+    private static func canWrite(to directory: URL, fileManager: FileManager) -> Bool {
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            let probe = directory.appendingPathComponent(".zoidlockin-write-probe-\(UUID().uuidString)")
+            try Data().write(to: probe)
+            try fileManager.removeItem(at: probe)
+            return true
+        } catch {
+            return false
+        }
     }
 
     public func append(_ record: EmergencyIncidentRecord) throws {

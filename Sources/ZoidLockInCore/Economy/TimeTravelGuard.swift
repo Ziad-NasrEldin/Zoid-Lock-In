@@ -3,7 +3,7 @@ import Foundation
 /// Compares wall-clock motion against a monotonic hardware baseline.
 ///
 /// A jump larger than 120 seconds means the user (or NTP) moved the system
-/// clock independently of `CLOCK_MONOTONIC_RAW` / `mach_continuous_time`.
+/// clock independently of `CLOCK_MONOTONIC` / `mach_continuous_time`.
 public enum TimeTravelError: Error, Equatable, Sendable {
     case clockTampered(skewSeconds: TimeInterval)
 }

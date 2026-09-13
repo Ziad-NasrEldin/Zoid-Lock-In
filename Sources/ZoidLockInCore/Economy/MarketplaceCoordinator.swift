@@ -1,5 +1,18 @@
 import Foundation
 
+public enum MarketplaceCoordinatorError: Error, Equatable, Sendable {
+    case purchaseInFlight
+}
+
+extension MarketplaceCoordinatorError: LocalizedError {
+    public var errorDescription: String? {
+        switch self {
+        case .purchaseInFlight:
+            return "A marketplace purchase is already in flight"
+        }
+    }
+}
+
 /// User-space purchase coordinator: atomic ledger debit, HMAC voucher, XPC redeem.
 ///
 /// The privileged daemon never opens SQLite. This type lives with the engine in
@@ -15,6 +28,7 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
     private let lock = NSLock()
     private var localTimers: [AmenityKind: (startedAt: TimeInterval, durationSeconds: TimeInterval)] = [:]
     private var lastError: String?
+    private var inFlight = false
 
     public init(
         engine: ExchangeEngine,
@@ -34,26 +48,33 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
         withLock { lastError }
     }
 
+    public var purchaseInFlight: Bool {
+        withLock { inFlight }
+    }
+
     public func snapshot(status: EnforcementStatus? = nil) throws -> MarketplaceSnapshot {
         let ticker = try engine.snapshot()
         return assemble(ticker: ticker, status: status)
     }
 
     public func assemble(ticker: MenuBarTickerSnapshot, status: EnforcementStatus?) -> MarketplaceSnapshot {
-        let captured = withLock { () -> (String?, [AmenityKind: Int]) in
-            (lastError, localRemainingLocked(at: clock.nowSeconds()))
+        let captured = withLock { () -> (String?, [AmenityKind: Int], Bool) in
+            (lastError, localRemainingLocked(at: clock.nowSeconds()), inFlight)
         }
         return MarketplaceSnapshot.assemble(
             ticker: ticker,
             catalog: catalog,
             status: status,
             localRemaining: captured.1,
-            purchaseError: captured.0
+            purchaseError: captured.0,
+            purchaseInFlight: captured.2
         )
     }
 
     @discardableResult
     public func purchase(_ kind: AmenityKind) async throws -> AmenityPurchase {
+        try beginPurchase()
+        defer { endPurchase() }
         do {
             if kind.passKind != nil, redeemer == nil {
                 throw EnforcementControlError.amenityPassRequiresVoucher
@@ -61,9 +82,19 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
             let result = try engine.purchaseAmenity(kind, issuer: issuer)
             if let voucher = result.voucher {
                 guard let redeemer else {
+                    try engine.refundAmenity(result)
                     throw EnforcementControlError.amenityPassRequiresVoucher
                 }
-                try await redeemer.redeemAmenityVoucher(voucher)
+                do {
+                    try await redeemer.redeemAmenityVoucher(voucher)
+                } catch {
+                    if Self.isReplayOfAlreadyGrantedPass(error) {
+                        setPurchaseError(nil)
+                        return result
+                    }
+                    try engine.refundAmenity(result)
+                    throw error
+                }
             }
             if kind == .rest, let duration = result.durationSeconds {
                 recordRest(durationSeconds: TimeInterval(duration))
@@ -90,7 +121,30 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
         if let voucher = error as? AmenityVoucherError, let description = voucher.errorDescription {
             return description
         }
+        if let coordinator = error as? MarketplaceCoordinatorError, let description = coordinator.errorDescription {
+            return description
+        }
         return error.localizedDescription
+    }
+
+    private static func isReplayOfAlreadyGrantedPass(_ error: Error) -> Bool {
+        if let control = error as? EnforcementControlError, control == .replayNonceRejected {
+            return true
+        }
+        return false
+    }
+
+    private func beginPurchase() throws {
+        try withLock {
+            if inFlight {
+                throw MarketplaceCoordinatorError.purchaseInFlight
+            }
+            inFlight = true
+        }
+    }
+
+    private func endPurchase() {
+        withLock { inFlight = false }
     }
 
     private func recordRest(durationSeconds: TimeInterval) {

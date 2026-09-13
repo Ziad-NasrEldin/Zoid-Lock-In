@@ -213,7 +213,8 @@ public final class ExchangeEngine: @unchecked Sendable {
                         kind: passKind,
                         durationSeconds: duration,
                         nonce: UUID().uuidString,
-                        transactionID: transaction.id
+                        transactionID: transaction.id,
+                        issuedAt: now
                     )
                 } else {
                     voucher = nil
@@ -226,6 +227,38 @@ public final class ExchangeEngine: @unchecked Sendable {
                     voucher: voucher,
                     durationSeconds: duration
                 )
+            }
+        }
+    }
+
+    /// Append-only compensating credit for a debit whose XPC redeem failed.
+    @discardableResult
+    public func refundAmenity(_ purchase: AmenityPurchase) throws -> WalletTransaction {
+        try withLock {
+            try observeClocksLocked()
+            try ensureWritableLocked()
+            let refundedID = purchase.transaction.id.uuidString
+            let existing = try ledger.allTransactions().first { transaction in
+                transaction.transactionType == .refund && transaction.referenceID == refundedID
+            }
+            if let existing {
+                return existing
+            }
+
+            return try ledger.performAtomically {
+                let balance = try ledger.latestBalance()
+                let amount = CreditMath.normalize(purchase.cost)
+                let next = CreditMath.normalize(balance + amount)
+                let transaction = WalletTransaction(
+                    timestamp: wallClock.now(),
+                    amount: amount,
+                    balanceAfter: next,
+                    transactionType: .refund,
+                    referenceID: refundedID,
+                    description: "REFUND_AMENITY \(purchase.kind.rawValue) \(refundedID)"
+                )
+                try ledger.appendTransaction(transaction)
+                return transaction
             }
         }
     }
@@ -304,11 +337,17 @@ public final class ExchangeEngine: @unchecked Sendable {
                     .filter { $0.transactionType == .mint }
                     .reduce(0) { $0 + $1.amount }
             )
-            let spent = CreditMath.normalize(
+            let spentGross = CreditMath.normalize(
                 dayTransactions
                     .filter { $0.transactionType == .spend }
                     .reduce(0) { $0 + abs($1.amount) }
             )
+            let refunded = CreditMath.normalize(
+                dayTransactions
+                    .filter { $0.transactionType == .refund }
+                    .reduce(0) { $0 + $1.amount }
+            )
+            let spent = CreditMath.normalize(max(0, spentGross - refunded))
 
             var vault = try ledger.loadVault()
             var balance = try ledger.latestBalance()

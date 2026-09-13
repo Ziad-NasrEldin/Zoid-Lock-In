@@ -12,6 +12,8 @@ struct DomainFilterRulesTests {
             "youtube.com",
             "www.youtube.com",
             "m.youtube.com",
+            "googlevideo.com",
+            "r3.sn-abc.googlevideo.com",
             "talabat.com",
             "www.talabat.com",
             "deliveroo.com",
@@ -20,8 +22,13 @@ struct DomainFilterRulesTests {
             "x.com",
             "www.x.com",
             "reddit.com",
+            "redditstatic.com",
             "ubereats.com",
             "elmenus.com",
+            "nflxvideo.net",
+            "ttvnw.net",
+            "cdninstagram.com",
+            "fbcdn.net",
         ]
 
         for hostname in blocked {

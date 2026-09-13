@@ -6,7 +6,7 @@ public protocol MonotonicTimeProviding: Sendable {
     func nowSeconds() -> TimeInterval
 }
 
-/// Continuous monotonic clock (`CLOCK_MONOTONIC_RAW` / `mach_continuous_time`).
+/// Continuous monotonic clock (`CLOCK_MONOTONIC` / `mach_continuous_time`).
 ///
 /// Advances while the system is asleep so a 30-minute pass cannot be extended
 /// by closing a laptop lid. Does not track NTP or the wall clock.
@@ -14,7 +14,7 @@ public struct MachContinuousTimeClock: MonotonicTimeProviding {
     public init() {}
 
     public func nowSeconds() -> TimeInterval {
-        TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW)) / 1_000_000_000
+        TimeInterval(clock_gettime_nsec_np(CLOCK_MONOTONIC)) / 1_000_000_000
     }
 }
 

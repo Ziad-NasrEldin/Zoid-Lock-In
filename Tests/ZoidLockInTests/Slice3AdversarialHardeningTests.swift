@@ -17,9 +17,11 @@ struct Slice3AdversarialHardeningTests {
         let hub = FilterPolicyHub()
         let daemon = EnforcementDaemon(
             processSentinel: ProcessSentinel(runtime: runtime, scanInterval: 1.5),
+            wallClock: SliceTestCivil.daytimeWall,
             filterPolicyHub: hub,
             incidentStore: InMemoryEmergencyIncidentStore(),
-            bootSessionUUID: "boot-food"
+            bootSessionUUID: "boot-food",
+            civilClock: SliceTestCivil.civil
         )
         daemon.commitKindScopedPass(kind: .food, durationSeconds: 1_800)
 
@@ -61,9 +63,11 @@ struct Slice3AdversarialHardeningTests {
         let hub = FilterPolicyHub()
         let daemon = EnforcementDaemon(
             processSentinel: ProcessSentinel(runtime: runtime, scanInterval: 1.5),
+            wallClock: SliceTestCivil.daytimeWall,
             filterPolicyHub: hub,
             incidentStore: InMemoryEmergencyIncidentStore(),
-            bootSessionUUID: "boot-gaming"
+            bootSessionUUID: "boot-gaming",
+            civilClock: SliceTestCivil.civil
         )
         daemon.commitKindScopedPass(kind: .gaming, durationSeconds: 1_800)
 

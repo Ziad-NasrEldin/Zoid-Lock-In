@@ -71,6 +71,7 @@ final class MenuBarSession: ObservableObject {
     private let client: XPCEnforcementClient
     private let economyQueue: DispatchQueue
     nonisolated(unsafe) private var timer: DispatchSourceTimer?
+    private var purchaseInFlight = false
 
     init() {
         let ledger = (try? SQLiteEconomicLedger.default()) ?? (try? SQLiteEconomicLedger())
@@ -121,7 +122,10 @@ final class MenuBarSession: ObservableObject {
     }
 
     func purchase(_ kind: AmenityKind) {
+        guard !purchaseInFlight else { return }
+        purchaseInFlight = true
         Task {
+            defer { purchaseInFlight = false }
             do {
                 try await marketplaceCoordinator.purchase(kind)
             } catch {

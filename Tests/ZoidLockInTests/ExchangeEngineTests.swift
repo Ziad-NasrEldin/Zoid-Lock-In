@@ -304,6 +304,13 @@ struct ExchangeEngineTests {
     }
 }
 
+enum SliceTestCivil {
+    static let timeZone = TimeZone(secondsFromGMT: 0)!
+    static let civil = LocalCivilClock(timeZone: timeZone)
+    static let daytime = civil.date(year: 2026, month: 9, day: 10, hour: 10, minute: 0)
+    static var daytimeWall: FixedWallClock { FixedWallClock(daytime) }
+}
+
 final class EngineHarness: @unchecked Sendable {
     let civil: LocalCivilClock
     let wall: ManualWallClock

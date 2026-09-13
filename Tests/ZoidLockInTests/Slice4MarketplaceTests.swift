@@ -14,7 +14,7 @@ struct Slice4MarketplaceTests {
     func ledgerDebitsOnPurchase() async throws {
         let harness = EngineHarness(hour: 10, minute: 0)
         try seed(harness, credits: 6.0)
-        let daemon = makeDaemon(clock: harness.mono, boot: "boot-debit")
+        let daemon = makeDaemon(harness, boot: "boot-debit")
         let coordinator = MarketplaceCoordinator(
             engine: harness.engine,
             issuer: AmenityVoucherIssuer(),
@@ -38,7 +38,7 @@ struct Slice4MarketplaceTests {
     func curfewRejectsEntertainmentAllowsRest() async throws {
         let harness = EngineHarness(hour: 8, minute: 0)
         try seed(harness, credits: 10.0)
-        let daemon = makeDaemon(clock: harness.mono, boot: "boot-curfew")
+        let daemon = makeDaemon(harness, boot: "boot-curfew")
         let coordinator = MarketplaceCoordinator(
             engine: harness.engine,
             issuer: AmenityVoucherIssuer(),
@@ -76,7 +76,7 @@ struct Slice4MarketplaceTests {
     func insufficientBalanceRejected() async throws {
         let harness = EngineHarness(hour: 11, minute: 0)
         try seed(harness, credits: 1.0)
-        let daemon = makeDaemon(clock: harness.mono, boot: "boot-funds")
+        let daemon = makeDaemon(harness, boot: "boot-funds")
         let coordinator = MarketplaceCoordinator(
             engine: harness.engine,
             issuer: AmenityVoucherIssuer(),
@@ -106,7 +106,7 @@ struct Slice4MarketplaceTests {
     func fridayRestZeroCostStillRedeems() async throws {
         let friday = EngineHarness(year: 2026, month: 9, day: 11, hour: 10, minute: 0)
         #expect(friday.civil.isFriday(friday.wall.now()))
-        let daemon = makeDaemon(clock: friday.mono, boot: "boot-friday")
+        let daemon = makeDaemon(friday, boot: "boot-friday")
         let coordinator = MarketplaceCoordinator(
             engine: friday.engine,
             issuer: AmenityVoucherIssuer(),
@@ -147,9 +147,11 @@ struct Slice4MarketplaceTests {
         let daemon = EnforcementDaemon(
             processSentinel: ProcessSentinel(runtime: runtime, scanInterval: 1.5),
             clock: clock,
+            wallClock: SliceTestCivil.daytimeWall,
             filterPolicyHub: hub,
             incidentStore: InMemoryEmergencyIncidentStore(),
-            bootSessionUUID: "boot-concurrent"
+            bootSessionUUID: "boot-concurrent",
+            civilClock: SliceTestCivil.civil
         )
 
         daemon.commitKindScopedPass(kind: .food, durationSeconds: 1_800)
@@ -196,9 +198,11 @@ struct Slice4MarketplaceTests {
         let daemon = EnforcementDaemon(
             processSentinel: ProcessSentinel(runtime: runtime, scanInterval: 1.5),
             clock: clock,
+            wallClock: SliceTestCivil.daytimeWall,
             filterPolicyHub: hub,
             incidentStore: InMemoryEmergencyIncidentStore(),
-            bootSessionUUID: "boot-expiry"
+            bootSessionUUID: "boot-expiry",
+            civilClock: SliceTestCivil.civil
         )
         daemon.commitKindScopedPass(kind: .food, durationSeconds: 1_800)
         daemon.commitKindScopedPass(kind: .streaming, durationSeconds: 3_600)
@@ -223,7 +227,7 @@ struct Slice4MarketplaceTests {
     func xpcVoucherVerification() async throws {
         let harness = EngineHarness(hour: 10, minute: 0)
         try seed(harness, credits: 10.0)
-        let daemon = makeDaemon(clock: harness.mono, boot: "boot-voucher")
+        let daemon = makeDaemon(harness, boot: "boot-voucher")
         let issuer = AmenityVoucherIssuer()
         let purchase = try harness.engine.purchaseAmenity(.food, issuer: issuer)
         let voucher = try #require(purchase.voucher)
@@ -273,7 +277,7 @@ struct Slice4MarketplaceTests {
     func coordinatorPurchasesConcurrentPasses() async throws {
         let harness = EngineHarness(hour: 10, minute: 0)
         try seed(harness, credits: 10.0)
-        let daemon = makeDaemon(clock: harness.mono, boot: "boot-market")
+        let daemon = makeDaemon(harness, boot: "boot-market")
         let coordinator = MarketplaceCoordinator(
             engine: harness.engine,
             issuer: AmenityVoucherIssuer(),
@@ -373,13 +377,14 @@ private func seed(_ harness: EngineHarness, credits: Double) throws {
     )
 }
 
-private func makeDaemon(clock: ManualMonotonicClock, boot: String) -> EnforcementDaemon {
+private func makeDaemon(_ harness: EngineHarness, boot: String) -> EnforcementDaemon {
     EnforcementDaemon(
-        clock: clock,
-        wallClock: FixedWallClock(Date(timeIntervalSince1970: 1_700_000_000)),
+        clock: harness.mono,
+        wallClock: harness.wall,
         incidentStore: InMemoryEmergencyIncidentStore(),
         bootSessionUUID: boot,
-        voucherVerifier: AmenityVoucherVerifier()
+        voucherVerifier: AmenityVoucherVerifier(),
+        civilClock: harness.civil
     )
 }
 

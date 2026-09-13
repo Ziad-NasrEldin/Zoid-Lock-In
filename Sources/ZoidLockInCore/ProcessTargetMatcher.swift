@@ -38,6 +38,15 @@ public struct ProcessTargetMatcher: Sendable, Equatable {
         "Whisky",
         "game-porting-toolkit",
         "gptk",
+        "dota2",
+        "cs2",
+        "hl2_osx",
+        "World of Warcraft",
+    ]
+
+    /// Real Steam titles live under `steamapps/common/`, not inside `Steam.app`.
+    public static let gamePathNeedles: [String] = [
+        "steamapps/common/",
     ]
 
     public init(targetNames: [String] = ProcessTargetMatcher.defaultTargets) {
@@ -82,6 +91,10 @@ public struct ProcessTargetMatcher: Sendable, Equatable {
 
         let basename = Self.lastPathComponent(normalizedPath)
         if matchesName(basename) {
+            return true
+        }
+
+        if Self.gamePathNeedles.contains(where: { normalizedPath.contains($0) }) {
             return true
         }
 

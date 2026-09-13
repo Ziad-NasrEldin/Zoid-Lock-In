@@ -11,15 +11,17 @@ import ZoidLockInIPC
 @main
 struct ZoidLockInDaemonMain {
     static func main() {
-        let storage = FileEmergencyIncidentStore.defaultPrivilegedDirectory
+        let storage = FileEmergencyIncidentStore.resolvedDirectory()
         let incidents = FileEmergencyIncidentStore(directory: storage)
         let filterStatus = FileFilterStatusStore(directory: storage)
+        let journal = FileRedemptionJournal(directory: storage)
         let daemon = EnforcementDaemon(
             clock: MachContinuousTimeClock(),
             incidentStore: incidents,
             filterStatusSink: filterStatus,
             bootSessionUUID: BootSession.currentUUID(),
-            storageDirectory: storage
+            storageDirectory: storage,
+            redemptionJournal: journal
         )
 
         // Fail-closed: apply full lockdown immediately on boot / respawn.

@@ -58,6 +58,36 @@ struct ProcessTargetMatcherTests {
         )
         #expect(
             matcher.matches(
+                processName: "Game",
+                executablePath: "/Users/me/Library/Application Support/Steam/steamapps/common/SomeTitle/Game"
+            )
+        )
+        #expect(
+            matcher.matches(
+                processName: "dota2",
+                executablePath: "/Users/me/Library/Application Support/Steam/steamapps/common/dota 2 beta/dota2"
+            )
+        )
+        #expect(
+            matcher.matches(
+                processName: "cs2",
+                executablePath: "/Users/me/Library/Application Support/Steam/steamapps/common/Counter-Strike Global Offensive/cs2"
+            )
+        )
+        #expect(
+            matcher.matches(
+                processName: "hl2_osx",
+                executablePath: "/Users/me/Library/Application Support/Steam/steamapps/common/Half-Life 2/hl2_osx"
+            )
+        )
+        #expect(
+            matcher.matches(
+                processName: "World of Warcraft",
+                executablePath: "/Applications/World of Warcraft/_retail_/World of Warcraft.app/Contents/MacOS/World of Warcraft"
+            )
+        )
+        #expect(
+            matcher.matches(
                 processName: "Discord Canary",
                 executablePath: "/Applications/Discord Canary.app/Contents/MacOS/Discord Canary"
             )

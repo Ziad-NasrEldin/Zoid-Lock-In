@@ -8,6 +8,7 @@ public enum EnforcementControlError: Error, Equatable, Sendable {
     case invalidAmenityVoucher(String)
     case policyRejected(String)
     case replayNonceRejected
+    case curfewActive
 }
 
 extension EnforcementControlError: LocalizedError {
@@ -25,6 +26,8 @@ extension EnforcementControlError: LocalizedError {
             return "Enforcement policy rejected: \(reason)"
         case .replayNonceRejected:
             return "Replay nonce rejected"
+        case .curfewActive:
+            return "Curfew is active (22:00–03:59). Entertainment and food passes are locked."
         }
     }
 }

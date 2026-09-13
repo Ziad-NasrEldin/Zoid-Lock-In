@@ -51,6 +51,16 @@ public enum PassKind: String, Sendable, Equatable, Hashable, Codable, CaseIterab
         self != .emergency
     }
 
+    /// Food, phone, streaming, and gaming are clipped and revoked at 22:00.
+    public var isCurfewSensitive: Bool {
+        switch self {
+        case .food, .phone, .streaming, .gaming:
+            return true
+        case .emergency:
+            return false
+        }
+    }
+
     public static func < (lhs: PassKind, rhs: PassKind) -> Bool {
         lhs.canonicalRank < rhs.canonicalRank
     }
@@ -282,6 +292,23 @@ public struct DaemonPassController: Sendable, Equatable {
 
     public mutating func revoke(kind: PassKind) {
         passes.removeValue(forKey: kind)
+    }
+
+    /// Drops entertainment / delivery kinds when civil time enters curfew.
+    public mutating func revokeCurfewSensitive() {
+        passes = passes.filter { !$0.key.isCurfewSensitive }
+    }
+
+    /// Catalog duration clipped to the remaining civil window until 22:00.
+    public static func clippedDuration(
+        kind: PassKind,
+        catalogSeconds: TimeInterval,
+        secondsUntilCurfew: TimeInterval
+    ) -> TimeInterval {
+        guard kind.isCurfewSensitive else {
+            return catalogSeconds
+        }
+        return min(catalogSeconds, max(0, secondsUntilCurfew))
     }
 
     /// Returns true when at least one previously active pass just expired.

@@ -184,8 +184,10 @@ struct ProcessSentinelTests {
 
         let terminated = sentinel.scanAndTerminate()
 
-        #expect(terminated.map(\.pid).contains(202))
-        #expect(runtime.sentGroupSignals[202] == [SIGSTOP, SIGKILL])
+        #expect(Set(terminated.map(\.pid)) == Set([202, 500]))
+        #expect(runtime.sentSignals[202] == [SIGSTOP, SIGKILL])
+        #expect(runtime.sentSignals[500] == [SIGSTOP, SIGKILL])
+        #expect(runtime.sentGroupSignals[202]?.contains(SIGKILL) == true)
         #expect(sentinel.lastSignaledProcessGroups.contains(202))
     }
 

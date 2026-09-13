@@ -63,6 +63,22 @@ public struct LocalCivilClock: Sendable {
         return hour >= 22 || hour < 4
     }
 
+    /// Seconds remaining until the next 22:00:00. Zero while curfew is active.
+    public func secondsUntilCurfew(_ date: Date) -> TimeInterval {
+        if isCurfew(date) {
+            return 0
+        }
+        var components = calendar.dateComponents([.year, .month, .day], from: date)
+        components.hour = 22
+        components.minute = 0
+        components.second = 0
+        components.nanosecond = 0
+        guard let start = calendar.date(from: components) else {
+            return 0
+        }
+        return max(0, start.timeIntervalSince(date))
+    }
+
     public func weekdayCaption(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.calendar = calendar

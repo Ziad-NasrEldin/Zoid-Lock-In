@@ -116,7 +116,10 @@ public struct MarketplacePopoverView: View {
                 .padding(.bottom, 4)
 
             ForEach(snapshot.items) { item in
-                MarketplaceCatalogRow(item: item) {
+                MarketplaceCatalogRow(
+                    item: item,
+                    isPurchaseDisabled: snapshot.purchaseInFlight || item.isBlockedByCurfew
+                ) {
                     onPurchase?(item.kind)
                 }
             }
@@ -166,6 +169,7 @@ public struct MarketplacePopoverView: View {
 
 struct MarketplaceCatalogRow: View {
     var item: MarketplaceItemSnapshot
+    var isPurchaseDisabled: Bool = false
     var onBuy: () -> Void
 
     var body: some View {
@@ -214,7 +218,8 @@ struct MarketplaceCatalogRow: View {
                     .background(item.isBlockedByCurfew ? SumiInk.inkMuted : SumiInk.seal)
             }
             .buttonStyle(.plain)
-            .opacity(item.isBlockedByCurfew ? 0.72 : 1)
+            .disabled(isPurchaseDisabled)
+            .opacity(isPurchaseDisabled ? 0.72 : 1)
         }
         .padding(.vertical, 5)
     }

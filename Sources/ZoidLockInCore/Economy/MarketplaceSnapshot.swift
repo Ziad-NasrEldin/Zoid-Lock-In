@@ -68,6 +68,7 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
     public var localDayKey: String
     public var dayStateCaption: String
     public var purchaseError: String?
+    public var purchaseInFlight: Bool
     public var items: [MarketplaceItemSnapshot]
 
     public init(
@@ -82,7 +83,8 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
         localDayKey: String,
         dayStateCaption: String,
         purchaseError: String?,
-        items: [MarketplaceItemSnapshot]
+        items: [MarketplaceItemSnapshot],
+        purchaseInFlight: Bool = false
     ) {
         self.spendableBalance = CreditMath.normalize(spendableBalance)
         self.walletBalance = CreditMath.normalize(walletBalance)
@@ -95,6 +97,7 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
         self.localDayKey = localDayKey
         self.dayStateCaption = dayStateCaption
         self.purchaseError = purchaseError
+        self.purchaseInFlight = purchaseInFlight
         self.items = items
     }
 
@@ -133,7 +136,8 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
         catalog: AmenityCatalog = .standard,
         status: EnforcementStatus? = nil,
         localRemaining: [AmenityKind: Int] = [:],
-        purchaseError: String? = nil
+        purchaseError: String? = nil,
+        purchaseInFlight: Bool = false
     ) -> MarketplaceSnapshot {
         let remainingByPass: [PassKind: Int] = Dictionary(
             uniqueKeysWithValues: (status?.activePasses ?? []).map { ($0.kind, $0.remainingSeconds) }
@@ -174,7 +178,8 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
             localDayKey: ticker.localDayKey,
             dayStateCaption: ticker.dayStateCaption,
             purchaseError: purchaseError,
-            items: items
+            items: items,
+            purchaseInFlight: purchaseInFlight
         )
     }
 

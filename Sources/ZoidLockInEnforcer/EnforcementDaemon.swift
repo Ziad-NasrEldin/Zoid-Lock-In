@@ -19,8 +19,10 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     public let auditLog: XPCConnectionAuditLog
     public let filterPolicyHub: FilterPolicyHub
     public let incidentStore: any EmergencyIncidentStoring
+    public let redemptionJournal: any RedemptionJournaling
     public let bootSessionUUID: String
     public let voucherVerifier: AmenityVoucherVerifier
+    public let civilClock: LocalCivilClock
 
     private let filterStatusSink: (any FilterEnforcementStatusPublishing)?
     private let lock = NSLock()
@@ -29,6 +31,7 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     private var passController = DaemonPassController()
     private var heartbeatMonitor = HeartbeatMonitor()
     private var usedNonces: Set<String> = []
+    private var usedTransactionIDs: Set<UUID> = []
     private var liveConnectionCount = 0
     private var isStarted = false
     private var watchdog: DispatchSourceTimer?
@@ -49,7 +52,9 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         filterStatusSink: (any FilterEnforcementStatusPublishing)? = nil,
         bootSessionUUID: String = BootSession.currentUUID(),
         storageDirectory: URL? = nil,
-        voucherVerifier: AmenityVoucherVerifier = AmenityVoucherVerifier()
+        voucherVerifier: AmenityVoucherVerifier = AmenityVoucherVerifier(),
+        redemptionJournal: (any RedemptionJournaling)? = nil,
+        civilClock: LocalCivilClock? = nil
     ) {
         let directory = storageDirectory ?? FileEmergencyIncidentStore.makeIsolatedDirectory()
         self.configuration = configuration
@@ -62,9 +67,11 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         self.auditLog = auditLog
         self.filterPolicyHub = filterPolicyHub
         self.incidentStore = incidentStore ?? FileEmergencyIncidentStore(directory: directory)
+        self.redemptionJournal = redemptionJournal ?? FileRedemptionJournal(directory: directory)
         self.filterStatusSink = filterStatusSink
         self.bootSessionUUID = bootSessionUUID
         self.voucherVerifier = voucherVerifier
+        self.civilClock = civilClock ?? LocalCivilClock(timeZone: .current)
         self.processSentinel = processSentinel ?? ProcessSentinel(
             matcher: policy.processMatcher,
             scanInterval: policy.processScanIntervalSeconds,
@@ -72,6 +79,7 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         )
         self.processSentinel.apply(policy)
         restoreCooldownFromIncidents()
+        restoreAmenityPassesFromJournal()
         publishEffectivePolicy(at: clock.nowSeconds())
     }
 
@@ -144,31 +152,46 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
     }
 
     public func redeemAmenityVoucher(_ voucher: AmenityPassVoucher) async throws {
+        let wallNow = wallClock.now()
         let claims: AmenityPassClaims
         do {
-            claims = try voucherVerifier.verify(voucher)
+            claims = try voucherVerifier.verify(voucher, now: wallNow)
         } catch {
             throw EnforcementControlError.invalidAmenityVoucher(
                 error.localizedDescription
             )
         }
 
-        let replayed = withLock { () -> Bool in
-            if usedNonces.contains(claims.nonce) {
-                return true
-            }
-            usedNonces.insert(claims.nonce)
-            return false
-        }
-        if replayed {
-            throw EnforcementControlError.replayNonceRejected
-        }
-
         let now = clock.nowSeconds()
-        withLock {
+        try withLock {
+            if usedNonces.contains(claims.nonce)
+                || usedTransactionIDs.contains(claims.transactionID)
+                || redemptionJournal.contains(nonce: claims.nonce)
+                || redemptionJournal.contains(transactionID: claims.transactionID) {
+                throw EnforcementControlError.replayNonceRejected
+            }
+
+            let duration = try clippedAmenityDurationLocked(
+                kind: claims.kind,
+                catalogSeconds: TimeInterval(claims.durationSeconds),
+                at: wallNow
+            )
+
+            let entry = RedemptionJournalEntry(
+                nonce: claims.nonce,
+                transactionID: claims.transactionID,
+                kind: claims.kind,
+                monotonicStart: now,
+                durationSeconds: duration,
+                bootUUID: bootSessionUUID,
+                issuedAt: claims.issuedAt
+            )
+            try redemptionJournal.record(entry)
+            usedNonces.insert(claims.nonce)
+            usedTransactionIDs.insert(claims.transactionID)
             passController.install(
                 kind: claims.kind,
-                durationSeconds: TimeInterval(claims.durationSeconds),
+                durationSeconds: duration,
                 at: now
             )
         }
@@ -330,6 +353,51 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
         timer.resume()
     }
 
+    private func restoreAmenityPassesFromJournal() {
+        let now = clock.nowSeconds()
+        let wallNow = wallClock.now()
+        let boot = bootSessionUUID
+        let inCurfew = civilClock.isCurfew(wallNow)
+        for entry in redemptionJournal.allEntries() {
+            usedNonces.insert(entry.nonce)
+            usedTransactionIDs.insert(entry.transactionID)
+            guard entry.isRestorable(bootUUID: boot, at: now) else {
+                continue
+            }
+            if entry.kind.isCurfewSensitive && inCurfew {
+                continue
+            }
+            passController.install(
+                kind: entry.kind,
+                durationSeconds: entry.durationSeconds,
+                at: entry.monotonicStart
+            )
+        }
+    }
+
+    private func clippedAmenityDurationLocked(
+        kind: PassKind,
+        catalogSeconds: TimeInterval,
+        at wallNow: Date
+    ) throws -> TimeInterval {
+        guard kind.isCurfewSensitive else {
+            return catalogSeconds
+        }
+        if civilClock.isCurfew(wallNow) {
+            throw EnforcementControlError.curfewActive
+        }
+        let remaining = civilClock.secondsUntilCurfew(wallNow)
+        let clipped = DaemonPassController.clippedDuration(
+            kind: kind,
+            catalogSeconds: catalogSeconds,
+            secondsUntilCurfew: remaining
+        )
+        if clipped < 1 {
+            throw EnforcementControlError.curfewActive
+        }
+        return clipped
+    }
+
     private func restoreCooldownFromIncidents() {
         let incidents = incidentStore.allIncidents()
         guard let last = incidents.last(where: { $0.kind == .emergency }) else {
@@ -353,6 +421,9 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
             }
 
             passController.expireIfNeeded(at: time)
+            if civilClock.isCurfew(wallClock.now()) {
+                passController.revokeCurfewSensitive()
+            }
 
             let live = passController.activePasses(at: time)
             let kinds = Set(live.keys)

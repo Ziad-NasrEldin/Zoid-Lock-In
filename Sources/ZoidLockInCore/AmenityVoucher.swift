@@ -9,20 +9,33 @@ public struct AmenityPassClaims: Sendable, Equatable, Codable {
     public var nonce: String
     public var transactionID: UUID
     public var teamID: String
+    public var issuedAt: Date
 
     public init(
         kind: PassKind,
         durationSeconds: Int,
         nonce: String,
         transactionID: UUID,
-        teamID: String
+        teamID: String,
+        issuedAt: Date
     ) {
         self.kind = kind
         self.durationSeconds = durationSeconds
         self.nonce = nonce
         self.transactionID = transactionID
         self.teamID = teamID
+        self.issuedAt = issuedAt
     }
+}
+
+/// Ticket lifetime and privileged-journal retention.
+public enum AmenityVoucherPolicy: Sendable {
+    /// Unredeemed vouchers die this many seconds after `issuedAt`.
+    public static let timeToLiveSeconds: TimeInterval = 300
+    /// Reject tickets stamped more than this far in the future.
+    public static let futureIssuedSkewSeconds: TimeInterval = 60
+    /// Redeemed nonce / transaction IDs stay in the journal at least this long.
+    public static let replayRetentionSeconds: TimeInterval = 36 * 60 * 60
 }
 
 public enum AmenityVoucherError: Error, Equatable, Sendable {
@@ -32,6 +45,7 @@ public enum AmenityVoucherError: Error, Equatable, Sendable {
     case kindNotRedeemable
     case durationMismatch
     case nonceMismatch
+    case expired
 }
 
 extension AmenityVoucherError: LocalizedError {
@@ -49,6 +63,8 @@ extension AmenityVoucherError: LocalizedError {
             return "Amenity voucher duration does not match the catalog"
         case .nonceMismatch:
             return "Amenity voucher nonce does not match the redemption request"
+        case .expired:
+            return "Amenity voucher has exceeded its \(Int(AmenityVoucherPolicy.timeToLiveSeconds))s TTL"
         }
     }
 }
@@ -80,14 +96,16 @@ public struct AmenityVoucherIssuer: Sendable {
         kind: PassKind,
         durationSeconds: Int,
         nonce: String,
-        transactionID: UUID
+        transactionID: UUID,
+        issuedAt: Date = Date()
     ) -> AmenityPassVoucher {
         let claims = AmenityPassClaims(
             kind: kind,
             durationSeconds: durationSeconds,
             nonce: nonce,
             transactionID: transactionID,
-            teamID: teamID
+            teamID: teamID,
+            issuedAt: issuedAt
         )
         let payload = Self.encode(claims)
         let signature = Data(HMAC<SHA256>.authenticationCode(for: payload, using: hmacKey))
@@ -97,6 +115,7 @@ public struct AmenityVoucherIssuer: Sendable {
     static func encode(_ claims: AmenityPassClaims) -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
+        encoder.dateEncodingStrategy = .iso8601
         return (try? encoder.encode(claims)) ?? Data()
     }
 }
@@ -112,7 +131,7 @@ public struct AmenityVoucherVerifier: Sendable {
         self.hmacKey = AmenityVoucherSecrets.hmacKey(teamID: teamID)
     }
 
-    public func verify(_ voucher: AmenityPassVoucher) throws -> AmenityPassClaims {
+    public func verify(_ voucher: AmenityPassVoucher, now: Date = Date()) throws -> AmenityPassClaims {
         guard !voucher.payload.isEmpty, !voucher.signature.isEmpty else {
             throw AmenityVoucherError.malformedPayload
         }
@@ -126,6 +145,7 @@ public struct AmenityVoucherVerifier: Sendable {
         }
 
         let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
         guard let claims = try? decoder.decode(AmenityPassClaims.self, from: voucher.payload) else {
             throw AmenityVoucherError.malformedPayload
         }
@@ -137,6 +157,11 @@ public struct AmenityVoucherVerifier: Sendable {
         }
         guard claims.durationSeconds == claims.kind.catalogDurationSeconds else {
             throw AmenityVoucherError.durationMismatch
+        }
+        let age = now.timeIntervalSince(claims.issuedAt)
+        if age > AmenityVoucherPolicy.timeToLiveSeconds
+            || age < -AmenityVoucherPolicy.futureIssuedSkewSeconds {
+            throw AmenityVoucherError.expired
         }
         return claims
     }
