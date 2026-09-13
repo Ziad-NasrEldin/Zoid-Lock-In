@@ -235,19 +235,17 @@ public final class MobileShieldCoordinator: MobileShieldPublishing, @unchecked S
     ) -> MobileShieldState {
         let sessionActive = ticker.focusState == .active || ticker.focusState == .pausedGrace
         var passes = passes(from: status, now: now)
-        if status == nil {
-            for record in previous.activePasses {
-                let remaining = record.remaining(at: now)
-                if remaining > 0, !passes.contains(where: { $0.kind == record.kind }) {
-                    passes.append(
-                        MobilePassRecord(
-                            kind: record.kind,
-                            expiresAtUtc: record.expiresAtUtc,
-                            remainingDurationSeconds: remaining,
-                            localRelockDurationSeconds: remaining
-                        )
+        for record in previous.activePasses {
+            let remaining = record.remaining(at: now)
+            if remaining > 0, !passes.contains(where: { $0.kind == record.kind }) {
+                passes.append(
+                    MobilePassRecord(
+                        kind: record.kind,
+                        expiresAtUtc: record.expiresAtUtc,
+                        remainingDurationSeconds: remaining,
+                        localRelockDurationSeconds: remaining
                     )
-                }
+                )
             }
         }
         switch event {

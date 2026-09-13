@@ -43,6 +43,7 @@ let package = Package(
             linkerSettings: [
                 .linkedFramework("Security"),
                 .linkedFramework("CoreGraphics"),
+                .linkedFramework("ImageIO"),
                 .linkedFramework("CryptoKit"),
             ]
         ),

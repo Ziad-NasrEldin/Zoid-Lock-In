@@ -1,18 +1,78 @@
 import SwiftUI
 import ZoidLockInCore
 
-/// Menu Bar extra content. Same SUMI-E marketplace plus the Mobile Shield banner.
+/// Menu Bar extra content. Marketplace plus the Offline Meeting sheet.
 public struct MenuBarExtraView: View {
     public var snapshot: MarketplaceSnapshot
+    public var meeting: OfflineMeetingSnapshot
     public var onPurchase: ((AmenityKind) -> Void)?
+    public var onPunchToggle: (() -> Void)?
+    public var onSubmitMeeting: (() -> Void)?
+    public var onImportArtifact: ((MeetingArtifactKind, URL) -> Void)?
 
-    public init(snapshot: MarketplaceSnapshot, onPurchase: ((AmenityKind) -> Void)? = nil) {
+    @State private var surface: MenuBarCompanionSurface = .market
+
+    public init(
+        snapshot: MarketplaceSnapshot,
+        onPurchase: ((AmenityKind) -> Void)? = nil,
+        meeting: OfflineMeetingSnapshot = .idle,
+        onPunchToggle: (() -> Void)? = nil,
+        onSubmitMeeting: (() -> Void)? = nil,
+        onImportArtifact: ((MeetingArtifactKind, URL) -> Void)? = nil
+    ) {
         self.snapshot = snapshot
+        self.meeting = meeting
         self.onPurchase = onPurchase
+        self.onPunchToggle = onPunchToggle
+        self.onSubmitMeeting = onSubmitMeeting
+        self.onImportArtifact = onImportArtifact
     }
 
     public var body: some View {
-        MarketplacePopoverView(snapshot: snapshot, onPurchase: onPurchase)
+        VStack(spacing: 0) {
+            surfaceSwitcher
+            Group {
+                if surface == .market {
+                    MarketplacePopoverView(snapshot: snapshot, onPurchase: onPurchase)
+                } else {
+                    OfflineMeetingPopoverView(
+                        snapshot: meeting,
+                        onPunchToggle: onPunchToggle,
+                        onSubmit: onSubmitMeeting,
+                        onImportArtifact: onImportArtifact
+                    )
+                }
+            }
+        }
+        .background(SumiInk.paper)
+    }
+
+    private var surfaceSwitcher: some View {
+        HStack(spacing: 0) {
+            switcherTab("市  MARKET", surface: .market)
+            switcherTab("会  MEETING", surface: .meeting)
+        }
+        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+        .padding(.horizontal, 22)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .frame(width: 440)
+        .background(SumiInk.paper)
+    }
+
+    private func switcherTab(_ title: String, surface tab: MenuBarCompanionSurface) -> some View {
+        Button {
+            surface = tab
+        } label: {
+            Text(title)
+                .font(SumiInk.caption(10))
+                .tracking(1.6)
+                .foregroundStyle(surface == tab ? Color.white : SumiInk.ink)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .background(surface == tab ? SumiInk.ink : SumiInk.paperSoft)
+        }
+        .buttonStyle(.plain)
     }
 }
 

@@ -19,6 +19,10 @@ enum ZoidLockInAppEntry {
             renderMobileShieldProofAndExit()
             return
         }
+        if CommandLine.arguments.contains("--render-offline-meeting-proof") {
+            renderOfflineMeetingProofAndExit()
+            return
+        }
         ZoidLockInMenuBarApp.main()
     }
 
@@ -60,6 +64,19 @@ enum ZoidLockInAppEntry {
             exit(1)
         }
     }
+
+    @MainActor
+    private static func renderOfflineMeetingProofAndExit() {
+        do {
+            try OfflineMeetingProofRenderer.renderPNG()
+            FileHandle.standardError.write(
+                Data("Wrote \(OfflineMeetingProofRenderer.defaultProofURL.path)\n".utf8)
+            )
+        } catch {
+            FileHandle.standardError.write(Data("Offline meeting proof render failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
 }
 
 struct ZoidLockInMenuBarApp: App {
@@ -69,7 +86,11 @@ struct ZoidLockInMenuBarApp: App {
         MenuBarExtra {
             MenuBarExtraView(
                 snapshot: session.marketplace,
-                onPurchase: session.purchase
+                onPurchase: session.purchase,
+                meeting: session.meeting,
+                onPunchToggle: session.punchToggle,
+                onSubmitMeeting: session.submitMeeting,
+                onImportArtifact: session.importArtifact
             )
         } label: {
             MenuBarTickerLabel(snapshot: session.snapshot)
@@ -82,10 +103,13 @@ struct ZoidLockInMenuBarApp: App {
 final class MenuBarSession: ObservableObject {
     @Published var snapshot: MenuBarTickerSnapshot
     @Published var marketplace: MarketplaceSnapshot
+    @Published var meeting: OfflineMeetingSnapshot
 
     private let coordinator: EconomyTickCoordinator
     private let marketplaceCoordinator: MarketplaceCoordinator
     private let shield: MobileShieldCoordinator
+    private let meetings: OfflineSessionCoordinator
+    private let purge: MeetingArtifactPurgeScheduler
     private let client: XPCEnforcementClient
     private let economyQueue: DispatchQueue
     nonisolated(unsafe) private var timer: DispatchSourceTimer?
@@ -122,20 +146,35 @@ final class MenuBarSession: ObservableObject {
             redeemer: client,
             shield: shield
         )
+        let artifactStore = MeetingArtifactStore.default()
+        let meetings = OfflineSessionCoordinator(
+            store: resolved,
+            artifacts: artifactStore,
+            clock: MachContinuousTimeClock(),
+            wallClock: SystemWallClock()
+        )
+        let purge = MeetingArtifactPurgeScheduler(
+            store: resolved,
+            artifacts: artifactStore
+        )
+        _ = try? purge.purgeExpired()
 
         self.coordinator = coordinator
         self.marketplaceCoordinator = marketplaceCoordinator
         self.shield = shield
+        self.meetings = meetings
+        self.purge = purge
         self.client = client
         self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
         let initial = (try? engine.snapshot()) ?? .proof
         self.snapshot = initial
         self.marketplace = MarketplaceSnapshot.assemble(ticker: initial)
+        self.meeting = meetings.snapshot()
 
         let coalescer = TickCoalescer()
         let timer = DispatchSource.makeTimerSource(queue: economyQueue)
         timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
-        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield] in
+        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield, meetings, purge] in
             guard coalescer.begin() else { return }
             Task {
                 defer { coalescer.end() }
@@ -155,9 +194,12 @@ final class MenuBarSession: ObservableObject {
                     status: status,
                     mobileShield: publication.status
                 )
+                _ = try? purge.purgeExpired()
+                let meetingSnap = meetings.snapshot()
                 await MainActor.run { [weak self] in
                     self?.snapshot = next
                     self?.marketplace = market
+                    self?.meeting = meetingSnap
                 }
             }
         }
@@ -191,6 +233,39 @@ final class MenuBarSession: ObservableObject {
             snapshot = next
             marketplace = market
         }
+    }
+
+    func punchToggle() {
+        do {
+            _ = try meetings.togglePunch()
+        } catch {
+            _ = error
+        }
+        meeting = meetings.snapshot()
+    }
+
+    func submitMeeting() {
+        do {
+            _ = try meetings.submit()
+        } catch {
+            _ = error
+        }
+        meeting = meetings.snapshot()
+    }
+
+    func importArtifact(kind: MeetingArtifactKind, url: URL) {
+        let accessed = url.startAccessingSecurityScopedResource()
+        defer {
+            if accessed {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+        do {
+            _ = try meetings.attach(kind: kind, from: url)
+        } catch {
+            _ = error
+        }
+        meeting = meetings.snapshot()
     }
 
     deinit {

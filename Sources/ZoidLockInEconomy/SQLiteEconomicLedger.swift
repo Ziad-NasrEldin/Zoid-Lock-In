@@ -7,7 +7,7 @@ import ZoidLockInCore
 /// privileged helper cannot inherit a GRDB/SQLite graph from `ZoidLockInCore`.
 public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
     public let fileURL: URL?
-    private let database: SQLiteDatabase
+    let database: SQLiteDatabase
     private let lock = NSRecursiveLock()
 
     public init(fileURL: URL) throws {
@@ -331,6 +331,39 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_focus_sessions_state ON focus_sessions(state);"
         )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS offline_meetings (
+                id TEXT PRIMARY KEY,
+                punch_in_time TEXT NOT NULL,
+                punch_out_time TEXT,
+                punch_in_monotonic REAL NOT NULL,
+                punch_out_monotonic REAL,
+                duration_seconds INTEGER NOT NULL DEFAULT 0,
+                boot_session_uuid TEXT NOT NULL,
+                agenda_notes TEXT NOT NULL DEFAULT '',
+                notes_sha256 TEXT,
+                receipt_image_sha256 TEXT,
+                photo_image_sha256 TEXT,
+                notes_local_path TEXT,
+                receipt_local_path TEXT,
+                photo_local_path TEXT,
+                artifacts_purge_date TEXT,
+                artifacts_purged_at TEXT,
+                audit_status TEXT NOT NULL DEFAULT 'PENDING',
+                denial_count INTEGER NOT NULL DEFAULT 0,
+                ai_reasoning TEXT,
+                credits_minted REAL NOT NULL DEFAULT 0.0,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        try database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meetings_status ON offline_meetings(audit_status);"
+        )
+        try database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_meetings_purge ON offline_meetings(artifacts_purge_date);"
+        )
     }
 
     private static func transaction(from row: [String: SQLiteValue]) throws -> WalletTransaction {
@@ -404,7 +437,7 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         )
     }
 
-    private static func double(_ value: SQLiteValue?) -> Double {
+    static func double(_ value: SQLiteValue?) -> Double {
         switch value {
         case .double(let number):
             return CreditMath.normalize(number)
@@ -415,7 +448,7 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         }
     }
 
-    private static func int(_ value: SQLiteValue?) -> Int64 {
+    static func int(_ value: SQLiteValue?) -> Int64 {
         switch value {
         case .integer(let number):
             return number
