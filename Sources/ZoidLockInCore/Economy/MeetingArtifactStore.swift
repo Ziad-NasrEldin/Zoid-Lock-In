@@ -173,9 +173,7 @@ public enum MeetingArtifactFormat: Sendable {
             guard let text = String(data: data, encoding: .utf8) else {
                 throw OfflineMeetingError.invalidArtifact(kind, reason: "notes.md must be UTF-8 markdown")
             }
-            if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                throw OfflineMeetingError.invalidArtifact(kind, reason: "agenda notes are empty")
-            }
+            try MeetingNotesPolicy.validate(text)
         case .receipt:
             try validateReceipt(data, fileExtension: fileExtension)
         case .environmentPhoto:

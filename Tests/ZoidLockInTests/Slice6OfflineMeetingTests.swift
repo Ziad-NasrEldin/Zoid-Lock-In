@@ -1,7 +1,5 @@
 import AppKit
-import CoreGraphics
 import Foundation
-import ImageIO
 import Testing
 import UniformTypeIdentifiers
 import ZoidLockInCore
@@ -33,11 +31,11 @@ struct Slice6OfflineMeetingTests {
         }
 
         harness.mono.advance(by: 890)
-        harness.wall.advance(by: 5)
+        harness.wall.advance(by: 800)
         let punchedOut = try harness.coordinator.punchOut()
         #expect(punchedOut.punchOutMonotonic == 1_900)
         #expect(punchedOut.durationSeconds == 900)
-        #expect(punchedOut.punchOutUTC == Date(timeIntervalSince1970: 1_700_000_015))
+        #expect(punchedOut.punchOutUTC == Date(timeIntervalSince1970: 1_700_000_810))
         #expect(punchedOut.punchOutUTC != punchedIn.punchInUTC.addingTimeInterval(900))
 
         let stored = try #require(try harness.store.meeting(id: punchedOut.id))
@@ -45,7 +43,7 @@ struct Slice6OfflineMeetingTests {
         #expect(stored.punchOutMonotonic == 1_900)
         #expect(stored.durationSeconds == 900)
         #expect(stored.punchInUTC.timeIntervalSince1970 == 1_700_000_000)
-        #expect(stored.punchOutUTC?.timeIntervalSince1970 == 1_700_000_015)
+        #expect(stored.punchOutUTC?.timeIntervalSince1970 == 1_700_000_810)
     }
 
     @Test("punch-out rejects sessions longer than 240 minutes")
@@ -151,7 +149,15 @@ struct Slice6OfflineMeetingTests {
         let punchOut = punchIn.addingTimeInterval(900)
         let validator = MeetingPhotoValidator(timeZone: TimeZone(secondsFromGMT: 0)!)
 
-        let stripped = try TestImageFactory.jpeg(make: nil, model: nil, dateTime: nil, software: nil)
+        let stripped = try TestImageFactory.jpeg(
+            make: nil,
+            model: nil,
+            dateTime: nil,
+            software: nil,
+            offset: nil,
+            includeCameraHardware: false,
+            includeMakerApple: false
+        )
         do {
             _ = try validator.validate(imageData: stripped, punchIn: punchIn, punchOut: punchOut)
             Issue.record("stripped EXIF must fail")
@@ -207,6 +213,7 @@ struct Slice6OfflineMeetingTests {
             store: ledger,
             artifacts: artifacts,
             clock: mono,
+            uptimeClock: mono,
             wallClock: wall,
             timeZone: TimeZone(secondsFromGMT: 0)!,
             bootSessionUUID: "boot-sqlite"
@@ -217,7 +224,7 @@ struct Slice6OfflineMeetingTests {
         wall.advance(by: 1_200)
         try coordinator.punchOut()
 
-        let notes = Data("# Agenda\nSite visit with the client.\n".utf8)
+        let notes = MeetingTestSupport.substantiveNotesData
         let receipt = TestImageFactory.minimalPDF
         let photo = try TestImageFactory.jpeg(dateTime: "2023:11:14 22:25:00")
         let notesHash = ArtifactDigest.sha256Hex(notes)
@@ -239,7 +246,7 @@ struct Slice6OfflineMeetingTests {
         #expect(reloaded.notesSHA256 == notesHash)
         #expect(reloaded.receiptSHA256 == receiptHash)
         #expect(reloaded.photoSHA256 == photoHash)
-        #expect(reloaded.agendaNotes.contains("Site visit"))
+        #expect(reloaded.agendaNotes.contains("Cairo rollout"))
         #expect(FileManager.default.fileExists(atPath: try #require(reloaded.notesLocalPath)))
         #expect(FileManager.default.fileExists(atPath: try #require(reloaded.receiptLocalPath)))
         #expect(FileManager.default.fileExists(atPath: try #require(reloaded.photoLocalPath)))
@@ -342,6 +349,7 @@ struct Slice6OfflineMeetingTests {
             store: store,
             artifacts: artifacts,
             clock: mono,
+            uptimeClock: mono,
             wallClock: wall,
             timeZone: TimeZone(secondsFromGMT: 0)!,
             bootSessionUUID: "boot-a"
@@ -352,6 +360,7 @@ struct Slice6OfflineMeetingTests {
             store: store,
             artifacts: artifacts,
             clock: ManualMonotonicClock(startingAt: 80),
+            uptimeClock: ManualMonotonicClock(startingAt: 80),
             wallClock: wall,
             timeZone: TimeZone(secondsFromGMT: 0)!,
             bootSessionUUID: "boot-b"
@@ -378,6 +387,7 @@ struct Slice6OfflineMeetingTests {
         #expect(recording.phase == .recording)
         #expect(recording.elapsedCaption == "00:02:05")
         #expect(recording.canPunchOut)
+        #expect(recording.canAbandon)
         #expect(!recording.canSubmit)
         #expect(recording.notes.caption.contains("MISSING"))
 
@@ -401,6 +411,7 @@ struct Slice6OfflineMeetingTests {
         #expect(submitted.submissionCaption.contains("PENDING GEMINI"))
         #expect(submitted.photo.caption.contains("APPLE CAMERA"))
         #expect(!submitted.canSubmit)
+        #expect(!submitted.canAbandon)
     }
 
     @Test("proof snapshot describes a completed 47-minute triple-gate meeting")
@@ -475,6 +486,7 @@ private struct MeetingHarness {
             store: store,
             artifacts: artifacts,
             clock: mono,
+            uptimeClock: mono,
             wallClock: wall,
             timeZone: TimeZone(secondsFromGMT: 0)!,
             bootSessionUUID: "boot-test"
@@ -489,8 +501,7 @@ private struct MeetingHarness {
     }
 
     func attachNotes() throws {
-        let notes = Data("# Agenda\nQuarterly planning with the client.\n".utf8)
-        _ = try coordinator.attach(kind: .notes, data: notes, fileExtension: "md")
+        _ = try coordinator.attach(kind: .notes, data: MeetingTestSupport.substantiveNotesData, fileExtension: "md")
     }
 
     func attachReceipt() throws {
@@ -498,98 +509,7 @@ private struct MeetingHarness {
     }
 
     func attachApplePhoto(exif: String) throws {
-        let jpeg = try TestImageFactory.jpeg(dateTime: exif)
+        let jpeg = try TestImageFactory.appleCameraJPEG(dateTime: exif)
         _ = try coordinator.attach(kind: .environmentPhoto, data: jpeg, fileExtension: "jpg")
-    }
-}
-
-private enum TestImageError: Error {
-    case context
-    case destination
-    case finalize
-}
-
-private enum TestImageFactory {
-    static let minimalPDF = Data("%PDF-1.4\n1 0 obj<< /Type /Catalog >>endobj\ntrailer<<>>\n%%EOF\n".utf8)
-
-    static func jpeg(
-        make: String? = "Apple",
-        model: String? = "iPhone 15 Pro",
-        dateTime: String? = "2023:11:14 22:20:00",
-        software: String? = nil,
-        offset: String? = nil
-    ) throws -> Data {
-        try encode(uti: UTType.jpeg, make: make, model: model, dateTime: dateTime, software: software, offset: offset)
-    }
-
-    static func png() throws -> Data {
-        try encode(uti: UTType.png, make: nil, model: nil, dateTime: nil, software: nil, offset: nil)
-    }
-
-    static func heicOrNil() -> Data? {
-        try? encode(uti: UTType.heic, make: "Apple", model: "iPhone 15 Pro", dateTime: "2023:11:14 22:20:00", software: nil, offset: nil)
-    }
-
-    private static func encode(
-        uti: UTType,
-        make: String?,
-        model: String?,
-        dateTime: String?,
-        software: String?,
-        offset: String?
-    ) throws -> Data {
-        let image = try makeCGImage()
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(
-            data,
-            uti.identifier as CFString,
-            1,
-            nil
-        ) else {
-            throw TestImageError.destination
-        }
-
-        var tiff: [CFString: Any] = [:]
-        if let make { tiff[kCGImagePropertyTIFFMake] = make }
-        if let model { tiff[kCGImagePropertyTIFFModel] = model }
-        if let dateTime { tiff[kCGImagePropertyTIFFDateTime] = dateTime }
-        if let software { tiff[kCGImagePropertyTIFFSoftware] = software }
-
-        var exif: [CFString: Any] = [:]
-        if let dateTime { exif[kCGImagePropertyExifDateTimeOriginal] = dateTime }
-        if let offset { exif[kCGImagePropertyExifOffsetTimeOriginal] = offset }
-
-        var properties: [CFString: Any] = [:]
-        if !tiff.isEmpty {
-            properties[kCGImagePropertyTIFFDictionary] = tiff
-        }
-        if !exif.isEmpty {
-            properties[kCGImagePropertyExifDictionary] = exif
-        }
-        CGImageDestinationAddImage(destination, image, properties as CFDictionary)
-        guard CGImageDestinationFinalize(destination) else {
-            throw TestImageError.finalize
-        }
-        return data as Data
-    }
-
-    private static func makeCGImage() throws -> CGImage {
-        guard let context = CGContext(
-            data: nil,
-            width: 48,
-            height: 48,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpaceCreateDeviceRGB(),
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            throw TestImageError.context
-        }
-        context.setFillColor(CGColor(red: 0.76, green: 0.23, blue: 0.18, alpha: 1))
-        context.fill(CGRect(x: 0, y: 0, width: 48, height: 48))
-        guard let image = context.makeImage() else {
-            throw TestImageError.context
-        }
-        return image
     }
 }

@@ -7,20 +7,24 @@ public struct OfflineMeetingPopoverView: View {
     public var snapshot: OfflineMeetingSnapshot
     public var onPunchToggle: (() -> Void)?
     public var onSubmit: (() -> Void)?
+    public var onAbandon: (() -> Void)?
     public var onImportArtifact: ((MeetingArtifactKind, URL) -> Void)?
 
     @State private var importingKind: MeetingArtifactKind?
     @State private var targetedKind: MeetingArtifactKind?
+    @State private var confirmAbandon = false
 
     public init(
         snapshot: OfflineMeetingSnapshot,
         onPunchToggle: (() -> Void)? = nil,
         onSubmit: (() -> Void)? = nil,
+        onAbandon: (() -> Void)? = nil,
         onImportArtifact: ((MeetingArtifactKind, URL) -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.onPunchToggle = onPunchToggle
         self.onSubmit = onSubmit
+        self.onAbandon = onAbandon
         self.onImportArtifact = onImportArtifact
     }
 
@@ -109,7 +113,7 @@ public struct OfflineMeetingPopoverView: View {
             .disabled(!snapshot.canPunchIn && !snapshot.canPunchOut)
             .opacity((snapshot.canPunchIn || snapshot.canPunchOut) ? 1 : 0.72)
         }
-        .padding(.vertical, 14)
+        .padding(.vertical, 10)
     }
 
     private var dropzone: some View {
@@ -238,6 +242,33 @@ public struct OfflineMeetingPopoverView: View {
             .buttonStyle(.plain)
             .disabled(!snapshot.canSubmit)
             .opacity(snapshot.canSubmit ? 1 : 0.72)
+
+            Button {
+                confirmAbandon = true
+            } label: {
+                Text("ABANDON MEETING")
+                    .font(SumiInk.caption(11))
+                    .tracking(2.2)
+                    .foregroundStyle(snapshot.canAbandon ? SumiInk.seal : SumiInk.inkMuted)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .overlay(Rectangle().stroke(snapshot.canAbandon ? SumiInk.seal : SumiInk.rule, lineWidth: 1))
+            }
+            .buttonStyle(.plain)
+            .disabled(!snapshot.canAbandon || onAbandon == nil)
+            .opacity(snapshot.canAbandon ? 1 : 0.55)
+            .confirmationDialog(
+                "Abandon this meeting?",
+                isPresented: $confirmAbandon,
+                titleVisibility: .visible
+            ) {
+                Button("Abandon Meeting", role: .destructive) {
+                    onAbandon?()
+                }
+                Button("Keep Recording", role: .cancel) {}
+            } message: {
+                Text("Elapsed time and staged artifacts will be discarded. Use this after a reboot or a session longer than 240 minutes.")
+            }
 
             HStack {
                 Text(snapshot.retentionCaption)

@@ -11,9 +11,69 @@ public enum OfflineMeetingPolicy: Sendable {
     public static let photoTimestampLeeway: TimeInterval = 15 * 60
     /// Raw binaries are eligible for deletion this long after submission.
     public static let artifactRetention: TimeInterval = 30 * 24 * 60 * 60
+    /// `CLOCK_MONOTONIC` sleep must stay at or under this fraction of the meeting.
+    public static let maximumSleepFraction: Double = 0.20
+    /// Awake `CLOCK_UPTIME_RAW` must cover at least the 15-minute minimum.
+    public static let minimumAwakeDuration: TimeInterval = minimumDuration
+    /// Environment photos must be at least this many pixels on each edge.
+    public static let minimumPhotoEdge: Int = 1_000
+    /// Agenda notes must contain at least this many non-whitespace characters.
+    public static let minimumNotesNonWhitespaceCharacters = 120
+    /// Agenda notes must contain at least this many letters (rejects punctuation stubs).
+    public static let minimumNotesLetterCharacters = 80
+    /// Agenda notes must have at least this many non-empty lines.
+    public static let minimumNotesNonEmptyLines = 2
 
     public static func durationIsWithinLimits(_ duration: TimeInterval) -> Bool {
         duration + 0.000_1 >= minimumDuration && duration - 0.000_1 <= maximumDuration
+    }
+
+    public static func sleepIsExcessive(sleepSeconds: TimeInterval, duration: TimeInterval) -> Bool {
+        guard duration > 0 else { return sleepSeconds > 0.000_1 }
+        return sleepSeconds > (duration * maximumSleepFraction) + 0.000_1
+    }
+
+    public static func awakeIsInsufficient(_ awakeSeconds: TimeInterval) -> Bool {
+        awakeSeconds + 0.000_1 < minimumAwakeDuration
+    }
+}
+
+/// Substance checks for the Markdown agenda so a punctuation stub cannot pass the gate.
+public enum MeetingNotesPolicy: Sendable {
+    public static func validate(_ text: String) throws {
+        let stripped = Self.stripInvisible(text)
+        let trimmed = stripped.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            throw OfflineMeetingError.invalidArtifact(.notes, reason: "agenda notes are empty")
+        }
+        let nonWhitespace = trimmed.filter { !$0.isWhitespace && !$0.isNewline }
+        if nonWhitespace.count < OfflineMeetingPolicy.minimumNotesNonWhitespaceCharacters {
+            throw OfflineMeetingError.invalidArtifact(
+                .notes,
+                reason: "agenda notes need at least \(OfflineMeetingPolicy.minimumNotesNonWhitespaceCharacters) non-whitespace characters"
+            )
+        }
+        let letterCount = trimmed.unicodeScalars.filter { CharacterSet.letters.contains($0) }.count
+        if letterCount < OfflineMeetingPolicy.minimumNotesLetterCharacters {
+            throw OfflineMeetingError.invalidArtifact(
+                .notes,
+                reason: "agenda notes look like a punctuation stub or placeholder"
+            )
+        }
+        let lines = trimmed.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if lines.count < OfflineMeetingPolicy.minimumNotesNonEmptyLines {
+            throw OfflineMeetingError.invalidArtifact(
+                .notes,
+                reason: "agenda notes must be multi-line (heading plus body)"
+            )
+        }
+    }
+
+    public static func stripInvisible(_ text: String) -> String {
+        let invisible = CharacterSet(charactersIn: "\u{200B}\u{200C}\u{200D}\u{2060}\u{FEFF}")
+        return String(text.unicodeScalars.filter { !invisible.contains($0) })
     }
 }
 
@@ -144,6 +204,10 @@ public enum OfflineMeetingError: Error, Equatable, Sendable {
     case invalidArtifact(MeetingArtifactKind, reason: String)
     case photoValidation(MeetingPhotoValidationError)
     case storageFailed(String)
+    case clockTampered(skewSeconds: TimeInterval)
+    case excessiveSleep(sleepSeconds: TimeInterval, awakeSeconds: TimeInterval, duration: TimeInterval)
+    case duplicateArtifact(MeetingArtifactKind)
+    case artifactHashMismatch(MeetingArtifactKind)
 }
 
 extension OfflineMeetingError: LocalizedError {
@@ -176,6 +240,17 @@ extension OfflineMeetingError: LocalizedError {
             return error.errorDescription
         case .storageFailed(let message):
             return "Meeting artifact storage failed: \(message)"
+        case .clockTampered(let skew):
+            return "Clock tamper lock: wall clock diverged from the monotonic baseline by \(Int(skew.rounded(.up)))s."
+        case .excessiveSleep(let sleepSeconds, let awakeSeconds, let duration):
+            let sleepMin = String(format: "%0.1f", sleepSeconds / 60)
+            let awakeMin = String(format: "%0.1f", awakeSeconds / 60)
+            let durationMin = String(format: "%0.1f", duration / 60)
+            return "Meeting sleep (\(sleepMin) min asleep / \(awakeMin) min awake of \(durationMin) min) exceeds the awake-uptime gate."
+        case .duplicateArtifact(let kind):
+            return "\(kind.displayName) SHA-256 was already used by another meeting."
+        case .artifactHashMismatch(let kind):
+            return "\(kind.displayName) on disk no longer matches the stored SHA-256 digest."
         }
     }
 
@@ -191,6 +266,8 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
     public var punchOutUTC: Date?
     public var punchInMonotonic: TimeInterval
     public var punchOutMonotonic: TimeInterval?
+    public var punchInUptime: TimeInterval
+    public var punchOutUptime: TimeInterval?
     public var durationSeconds: TimeInterval
     public var bootSessionUUID: String
     public var agendaNotes: String
@@ -214,6 +291,8 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
         punchOutUTC: Date? = nil,
         punchInMonotonic: TimeInterval,
         punchOutMonotonic: TimeInterval? = nil,
+        punchInUptime: TimeInterval? = nil,
+        punchOutUptime: TimeInterval? = nil,
         durationSeconds: TimeInterval = 0,
         bootSessionUUID: String,
         agendaNotes: String = "",
@@ -236,6 +315,8 @@ public struct OfflineMeetingRecord: Sendable, Equatable, Identifiable {
         self.punchOutUTC = punchOutUTC
         self.punchInMonotonic = punchInMonotonic
         self.punchOutMonotonic = punchOutMonotonic
+        self.punchInUptime = punchInUptime ?? punchInMonotonic
+        self.punchOutUptime = punchOutUptime
         self.durationSeconds = durationSeconds
         self.bootSessionUUID = bootSessionUUID
         self.agendaNotes = agendaNotes

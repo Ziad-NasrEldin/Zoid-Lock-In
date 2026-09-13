@@ -55,6 +55,7 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
     public var canPunchIn: Bool
     public var canPunchOut: Bool
     public var canSubmit: Bool
+    public var canAbandon: Bool
     public var punchButtonTitle: String
     public var submissionCaption: String
     public var auditStatusCaption: String
@@ -75,6 +76,7 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
         canPunchIn: Bool,
         canPunchOut: Bool,
         canSubmit: Bool,
+        canAbandon: Bool,
         punchButtonTitle: String,
         submissionCaption: String,
         auditStatusCaption: String,
@@ -94,6 +96,7 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
         self.canPunchIn = canPunchIn
         self.canPunchOut = canPunchOut
         self.canSubmit = canSubmit
+        self.canAbandon = canAbandon
         self.punchButtonTitle = punchButtonTitle
         self.submissionCaption = submissionCaption
         self.auditStatusCaption = auditStatusCaption
@@ -199,6 +202,7 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
             canPunchIn: phase == .idle || phase == .submitted,
             canPunchOut: phase == .recording,
             canSubmit: canSubmit,
+            canAbandon: phase == .recording || phase == .awaitingEvidence,
             punchButtonTitle: punchTitle,
             submissionCaption: submission,
             auditStatusCaption: record.auditStatus.rawValue.replacingOccurrences(of: "_", with: " "),
@@ -224,6 +228,7 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
             canPunchIn: true,
             canPunchOut: false,
             canSubmit: false,
+            canAbandon: false,
             punchButtonTitle: "PUNCH IN",
             submissionCaption: "IDLE · PUNCH IN TO START",
             auditStatusCaption: "STANDBY",
@@ -268,6 +273,7 @@ public struct OfflineMeetingSnapshot: Sendable, Equatable {
         canPunchIn: false,
         canPunchOut: false,
         canSubmit: false,
+        canAbandon: false,
         punchButtonTitle: "PUNCHED",
         submissionCaption: "SUBMITTED · PENDING GEMINI",
         auditStatusCaption: "PENDING",

@@ -5,8 +5,14 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
     public let store: any OfflineMeetingStoring
     public let artifacts: MeetingArtifactStore
     public let clock: any MonotonicTimeProviding
+    public let uptimeClock: any MonotonicTimeProviding
     public let wallClock: any WallClockProviding
     public let bootSessionUUID: String
+    public let timeTravel: TimeTravelGuard
+
+    /// Optional digital-focus engine. Punch-in concludes an active focus block
+    /// and holds the mutex so both surfaces cannot mint the same elapsed time.
+    public weak var focusEngine: ExchangeEngine?
 
     private let photoValidator: MeetingPhotoValidator
     private let lock = NSLock()
@@ -17,17 +23,28 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
         store: any OfflineMeetingStoring,
         artifacts: MeetingArtifactStore,
         clock: any MonotonicTimeProviding = MachContinuousTimeClock(),
+        uptimeClock: any MonotonicTimeProviding = MachUptimeClock(),
         wallClock: any WallClockProviding = SystemWallClock(),
+        timeTravel: TimeTravelGuard = TimeTravelGuard(),
         timeZone: TimeZone = .current,
         bootSessionUUID: String = BootSession.currentUUID()
     ) {
         self.store = store
         self.artifacts = artifacts
         self.clock = clock
+        self.uptimeClock = uptimeClock
         self.wallClock = wallClock
+        self.timeTravel = timeTravel
         self.bootSessionUUID = bootSessionUUID
         self.photoValidator = MeetingPhotoValidator(timeZone: timeZone)
         self.active = try? store.recordingMeeting()
+    }
+
+    public func bindFocusEngine(_ engine: ExchangeEngine) {
+        focusEngine = engine
+        if isPunchedIn {
+            engine.beginOfflineMeetingIgnoringFocus()
+        }
     }
 
     public var lastErrorMessage: String? {
@@ -38,29 +55,51 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
         withLock { active }
     }
 
+    public var isPunchedIn: Bool {
+        withLock { active?.isRecording == true }
+    }
+
     @discardableResult
     public func punchIn() throws -> OfflineMeetingRecord {
-        try withLock {
-            if let active, active.isRecording {
+        try ensureTimeTravel()
+        if activeMeeting?.isRecording == true {
+            return try withLock {
                 lastError = OfflineMeetingError.alreadyRecording.localizedDescription
                 throw OfflineMeetingError.alreadyRecording
             }
-            let record = OfflineMeetingRecord(
-                punchInUTC: wallClock.now(),
-                punchInMonotonic: clock.nowSeconds(),
-                bootSessionUUID: bootSessionUUID,
-                createdAt: wallClock.now()
-            )
-            try store.upsert(record)
-            active = record
-            lastError = nil
-            return record
+        }
+        try focusEngine?.beginOfflineMeeting()
+        do {
+            return try withLock {
+                if let active, active.isRecording {
+                    lastError = OfflineMeetingError.alreadyRecording.localizedDescription
+                    throw OfflineMeetingError.alreadyRecording
+                }
+                try ensureTimeTravelLocked()
+                let record = OfflineMeetingRecord(
+                    punchInUTC: wallClock.now(),
+                    punchInMonotonic: clock.nowSeconds(),
+                    punchInUptime: uptimeClock.nowSeconds(),
+                    bootSessionUUID: bootSessionUUID,
+                    createdAt: wallClock.now()
+                )
+                try store.upsert(record)
+                active = record
+                lastError = nil
+                return record
+            }
+        } catch {
+            if activeMeeting?.isRecording != true {
+                focusEngine?.endOfflineMeeting()
+            }
+            throw error
         }
     }
 
     @discardableResult
     public func punchOut() throws -> OfflineMeetingRecord {
-        try withLock {
+        try ensureTimeTravel()
+        let record = try withLock {
             guard var record = active, record.isRecording else {
                 lastError = OfflineMeetingError.notRecording.localizedDescription
                 throw OfflineMeetingError.notRecording
@@ -69,8 +108,12 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
                 lastError = OfflineMeetingError.bootSessionChanged.localizedDescription
                 throw OfflineMeetingError.bootSessionChanged
             }
+            try ensureTimeTravelLocked()
             let punched = clock.nowSeconds()
+            let punchedUptime = uptimeClock.nowSeconds()
             let duration = max(0, punched - record.punchInMonotonic)
+            let awake = max(0, punchedUptime - record.punchInUptime)
+            let sleepSeconds = max(0, duration - awake)
             if duration + 0.000_1 < OfflineMeetingPolicy.minimumDuration {
                 lastError = OfflineMeetingError.durationTooShort(duration).localizedDescription
                 throw OfflineMeetingError.durationTooShort(duration)
@@ -79,7 +122,18 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
                 lastError = OfflineMeetingError.durationTooLong(duration).localizedDescription
                 throw OfflineMeetingError.durationTooLong(duration)
             }
+            if OfflineMeetingPolicy.sleepIsExcessive(sleepSeconds: sleepSeconds, duration: duration)
+                || OfflineMeetingPolicy.awakeIsInsufficient(awake) {
+                let error = OfflineMeetingError.excessiveSleep(
+                    sleepSeconds: sleepSeconds,
+                    awakeSeconds: awake,
+                    duration: duration
+                )
+                lastError = error.localizedDescription
+                throw error
+            }
             record.punchOutMonotonic = punched
+            record.punchOutUptime = punchedUptime
             record.punchOutUTC = wallClock.now()
             record.durationSeconds = duration
             try store.upsert(record)
@@ -87,6 +141,8 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
             lastError = nil
             return record
         }
+        focusEngine?.endOfflineMeeting()
+        return record
     }
 
     @discardableResult
@@ -133,6 +189,12 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
                 data: data,
                 sourceExtension: fileExtension
             )
+            if kind == .receipt || kind == .environmentPhoto {
+                if try store.hasRegisteredArtifactHash(stored.sha256, kind: kind, excluding: record.id) {
+                    lastError = OfflineMeetingError.duplicateArtifact(kind).localizedDescription
+                    throw OfflineMeetingError.duplicateArtifact(kind)
+                }
+            }
             switch kind {
             case .notes:
                 record.notesLocalPath = stored.absoluteURL.path
@@ -145,7 +207,19 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
                 record.photoLocalPath = stored.absoluteURL.path
                 record.photoSHA256 = stored.sha256
             }
-            try store.upsert(record)
+            do {
+                try store.upsert(record)
+            } catch let error as OfflineMeetingError {
+                lastError = error.localizedDescription
+                throw error
+            } catch let error as EconomicLedgerError {
+                if case .sqlite(_, let message) = error,
+                   message.localizedCaseInsensitiveContains("UNIQUE") {
+                    lastError = OfflineMeetingError.duplicateArtifact(kind).localizedDescription
+                    throw OfflineMeetingError.duplicateArtifact(kind)
+                }
+                throw OfflineMeetingError.storageFailed(error.localizedDescription)
+            }
             active = record
             lastError = nil
             return stored
@@ -154,7 +228,8 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
 
     @discardableResult
     public func submit() throws -> OfflineMeetingRecord {
-        try withLock {
+        try ensureTimeTravel()
+        return try withLock {
             guard var record = active else {
                 lastError = OfflineMeetingError.noActiveMeeting.localizedDescription
                 throw OfflineMeetingError.noActiveMeeting
@@ -172,26 +247,11 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
                 lastError = OfflineMeetingError.missingArtifacts(missing).localizedDescription
                 throw OfflineMeetingError.missingArtifacts(missing)
             }
-            guard let photoPath = record.photoLocalPath,
-                  let punchOut = record.punchOutUTC
-            else {
-                lastError = OfflineMeetingError.missingArtifacts([.environmentPhoto]).localizedDescription
-                throw OfflineMeetingError.missingArtifacts([.environmentPhoto])
-            }
-            let photoData = try artifacts.load(kind: .environmentPhoto, path: photoPath)
-            do {
-                _ = try photoValidator.validate(
-                    imageData: photoData,
-                    punchIn: record.punchInUTC,
-                    punchOut: punchOut
-                )
-            } catch let error as MeetingPhotoValidationError {
-                lastError = error.localizedDescription
-                throw OfflineMeetingError.photoValidation(error)
-            }
-
+            try rehashAndValidateLocked(&record)
             record.auditStatus = .pending
-            record.artifactsPurgeDate = punchOut.addingTimeInterval(OfflineMeetingPolicy.artifactRetention)
+            record.artifactsPurgeDate = record.punchOutUTC.map {
+                $0.addingTimeInterval(OfflineMeetingPolicy.artifactRetention)
+            }
             try store.upsert(record)
             active = record
             lastError = nil
@@ -201,7 +261,7 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
 
     @discardableResult
     public func abandon() throws -> OfflineMeetingRecord {
-        try withLock {
+        let record = try withLock {
             guard var record = active, !record.isSubmitted else {
                 lastError = OfflineMeetingError.noActiveMeeting.localizedDescription
                 throw OfflineMeetingError.noActiveMeeting
@@ -209,11 +269,14 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
             record.auditStatus = .abandoned
             record.punchOutUTC = record.punchOutUTC ?? wallClock.now()
             record.punchOutMonotonic = record.punchOutMonotonic ?? clock.nowSeconds()
+            record.punchOutUptime = record.punchOutUptime ?? uptimeClock.nowSeconds()
             try store.upsert(record)
             active = nil
             lastError = nil
             return record
         }
+        focusEngine?.endOfflineMeeting()
+        return record
     }
 
     public func snapshot() -> OfflineMeetingSnapshot {
@@ -231,6 +294,71 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
             return try punchOut()
         }
         return try punchIn()
+    }
+
+    private func rehashAndValidateLocked(_ record: inout OfflineMeetingRecord) throws {
+        let kinds: [(MeetingArtifactKind, String?, String?)] = [
+            (.notes, record.notesLocalPath, record.notesSHA256),
+            (.receipt, record.receiptLocalPath, record.receiptSHA256),
+            (.environmentPhoto, record.photoLocalPath, record.photoSHA256),
+        ]
+        for (kind, path, expected) in kinds {
+            guard let path, let expected else {
+                lastError = OfflineMeetingError.missingArtifacts([kind]).localizedDescription
+                throw OfflineMeetingError.missingArtifacts([kind])
+            }
+            let data = try artifacts.load(kind: kind, path: path)
+            let live = ArtifactDigest.sha256Hex(data)
+            if live != expected {
+                lastError = OfflineMeetingError.artifactHashMismatch(kind).localizedDescription
+                throw OfflineMeetingError.artifactHashMismatch(kind)
+            }
+            if kind == .notes {
+                guard let text = String(data: data, encoding: .utf8) else {
+                    throw OfflineMeetingError.invalidArtifact(.notes, reason: "notes.md must be UTF-8 markdown")
+                }
+                do {
+                    try MeetingNotesPolicy.validate(text)
+                } catch {
+                    lastError = (error as? LocalizedError)?.errorDescription
+                    throw error
+                }
+            }
+            if kind == .environmentPhoto, let punchOut = record.punchOutUTC {
+                do {
+                    _ = try photoValidator.validate(
+                        imageData: data,
+                        punchIn: record.punchInUTC,
+                        punchOut: punchOut
+                    )
+                } catch let error as MeetingPhotoValidationError {
+                    lastError = error.localizedDescription
+                    throw OfflineMeetingError.photoValidation(error)
+                }
+            }
+        }
+    }
+
+    private func ensureTimeTravel() throws {
+        timeTravel.observe(wall: wallClock.now(), monotonic: clock.nowSeconds())
+        do {
+            try timeTravel.ensureWritable()
+        } catch let TimeTravelError.clockTampered(skew) {
+            let wrapped = OfflineMeetingError.clockTampered(skewSeconds: skew)
+            withLock { lastError = wrapped.localizedDescription }
+            throw wrapped
+        }
+    }
+
+    private func ensureTimeTravelLocked() throws {
+        timeTravel.observe(wall: wallClock.now(), monotonic: clock.nowSeconds())
+        do {
+            try timeTravel.ensureWritable()
+        } catch let TimeTravelError.clockTampered(skew) {
+            let wrapped = OfflineMeetingError.clockTampered(skewSeconds: skew)
+            lastError = wrapped.localizedDescription
+            throw wrapped
+        }
     }
 
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {

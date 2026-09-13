@@ -339,6 +339,8 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 punch_out_time TEXT,
                 punch_in_monotonic REAL NOT NULL,
                 punch_out_monotonic REAL,
+                punch_in_uptime REAL,
+                punch_out_uptime REAL,
                 duration_seconds INTEGER NOT NULL DEFAULT 0,
                 boot_session_uuid TEXT NOT NULL,
                 agenda_notes TEXT NOT NULL DEFAULT '',
@@ -358,12 +360,84 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             );
             """
         )
+        try addColumnIfNeeded(database, table: "offline_meetings", column: "punch_in_uptime", definition: "REAL")
+        try addColumnIfNeeded(database, table: "offline_meetings", column: "punch_out_uptime", definition: "REAL")
         try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_meetings_status ON offline_meetings(audit_status);"
         )
         try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_meetings_purge ON offline_meetings(artifacts_purge_date);"
         )
+        try database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_receipt_sha_unique
+            ON offline_meetings(receipt_image_sha256)
+            WHERE receipt_image_sha256 IS NOT NULL AND audit_status != 'ABANDONED';
+            """
+        )
+        try database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_meetings_photo_sha_unique
+            ON offline_meetings(photo_image_sha256)
+            WHERE photo_image_sha256 IS NOT NULL AND audit_status != 'ABANDONED';
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS offline_meetings_submitted_evidence_immutable
+            BEFORE UPDATE ON offline_meetings
+            FOR EACH ROW
+            WHEN OLD.audit_status NOT IN ('IN_PROGRESS', 'ABANDONED')
+            BEGIN
+                SELECT RAISE(ABORT, 'offline_meetings evidence is immutable after submit')
+                WHERE NEW.id IS NOT OLD.id
+                   OR NEW.punch_in_time IS NOT OLD.punch_in_time
+                   OR NEW.punch_out_time IS NOT OLD.punch_out_time
+                   OR NEW.punch_in_monotonic IS NOT OLD.punch_in_monotonic
+                   OR NEW.punch_out_monotonic IS NOT OLD.punch_out_monotonic
+                   OR NEW.punch_in_uptime IS NOT OLD.punch_in_uptime
+                   OR NEW.punch_out_uptime IS NOT OLD.punch_out_uptime
+                   OR NEW.duration_seconds IS NOT OLD.duration_seconds
+                   OR NEW.boot_session_uuid IS NOT OLD.boot_session_uuid
+                   OR NEW.agenda_notes IS NOT OLD.agenda_notes
+                   OR NEW.notes_sha256 IS NOT OLD.notes_sha256
+                   OR NEW.receipt_image_sha256 IS NOT OLD.receipt_image_sha256
+                   OR NEW.photo_image_sha256 IS NOT OLD.photo_image_sha256
+                   OR NEW.created_at IS NOT OLD.created_at
+                   OR NEW.credits_minted IS NOT OLD.credits_minted
+                   OR NEW.audit_status IS NOT OLD.audit_status;
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS offline_meetings_submitted_no_delete
+            BEFORE DELETE ON offline_meetings
+            FOR EACH ROW
+            WHEN OLD.audit_status NOT IN ('IN_PROGRESS', 'ABANDONED')
+            BEGIN
+                SELECT RAISE(ABORT, 'offline_meetings evidence is immutable after submit');
+            END;
+            """
+        )
+    }
+
+    private static func addColumnIfNeeded(
+        _ database: SQLiteDatabase,
+        table: String,
+        column: String,
+        definition: String
+    ) throws {
+        let rows = try database.query("PRAGMA table_info(\(table));")
+        let exists = rows.contains { row in
+            if case let .text(name)? = row["name"] {
+                return name == column
+            }
+            return false
+        }
+        if !exists {
+            try database.execute("ALTER TABLE \(table) ADD COLUMN \(column) \(definition);")
+        }
     }
 
     private static func transaction(from row: [String: SQLiteValue]) throws -> WalletTransaction {

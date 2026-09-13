@@ -90,6 +90,7 @@ struct ZoidLockInMenuBarApp: App {
                 meeting: session.meeting,
                 onPunchToggle: session.punchToggle,
                 onSubmitMeeting: session.submitMeeting,
+                onAbandonMeeting: session.abandonMeeting,
                 onImportArtifact: session.importArtifact
             )
         } label: {
@@ -119,11 +120,13 @@ final class MenuBarSession: ObservableObject {
         let ledger = (try? SQLiteEconomicLedger.default()) ?? (try? SQLiteEconomicLedger())
         let resolved = ledger ?? (try! SQLiteEconomicLedger())
         let cache = CachedEmergencyIncidentStore()
+        let timeTravel = TimeTravelGuard()
         let engine = ExchangeEngine(
             ledger: resolved,
             incidentStore: cache,
             clock: MachContinuousTimeClock(),
-            focusClock: MachUptimeClock()
+            focusClock: MachUptimeClock(),
+            timeTravel: timeTravel
         )
         let coordinator = EconomyTickCoordinator(engine: engine, incidentCache: cache)
         let client = XPCEnforcementClient()
@@ -151,8 +154,11 @@ final class MenuBarSession: ObservableObject {
             store: resolved,
             artifacts: artifactStore,
             clock: MachContinuousTimeClock(),
-            wallClock: SystemWallClock()
+            uptimeClock: MachUptimeClock(),
+            wallClock: SystemWallClock(),
+            timeTravel: timeTravel
         )
+        meetings.bindFocusEngine(engine)
         let purge = MeetingArtifactPurgeScheduler(
             store: resolved,
             artifacts: artifactStore
@@ -247,6 +253,15 @@ final class MenuBarSession: ObservableObject {
     func submitMeeting() {
         do {
             _ = try meetings.submit()
+        } catch {
+            _ = error
+        }
+        meeting = meetings.snapshot()
+    }
+
+    func abandonMeeting() {
+        do {
+            _ = try meetings.abandon()
         } catch {
             _ = error
         }

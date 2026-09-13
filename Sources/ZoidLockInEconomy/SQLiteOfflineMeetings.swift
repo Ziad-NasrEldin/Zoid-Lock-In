@@ -8,17 +8,20 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
                 """
                 INSERT INTO offline_meetings (
                     id, punch_in_time, punch_out_time, punch_in_monotonic, punch_out_monotonic,
+                    punch_in_uptime, punch_out_uptime,
                     duration_seconds, boot_session_uuid, agenda_notes, notes_sha256,
                     receipt_image_sha256, photo_image_sha256, notes_local_path,
                     receipt_local_path, photo_local_path, artifacts_purge_date,
                     artifacts_purged_at, audit_status, denial_count, ai_reasoning,
                     credits_minted, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     punch_in_time = excluded.punch_in_time,
                     punch_out_time = excluded.punch_out_time,
                     punch_in_monotonic = excluded.punch_in_monotonic,
                     punch_out_monotonic = excluded.punch_out_monotonic,
+                    punch_in_uptime = excluded.punch_in_uptime,
+                    punch_out_uptime = excluded.punch_out_uptime,
                     duration_seconds = excluded.duration_seconds,
                     boot_session_uuid = excluded.boot_session_uuid,
                     agenda_notes = excluded.agenda_notes,
@@ -93,6 +96,7 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
     private static var meetingSelectSQL: String {
         """
         SELECT id, punch_in_time, punch_out_time, punch_in_monotonic, punch_out_monotonic,
+               punch_in_uptime, punch_out_uptime,
                duration_seconds, boot_session_uuid, agenda_notes, notes_sha256,
                receipt_image_sha256, photo_image_sha256, notes_local_path,
                receipt_local_path, photo_local_path, artifacts_purge_date,
@@ -102,6 +106,33 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
         """
     }
 
+    public func hasRegisteredArtifactHash(
+        _ sha256: String,
+        kind: MeetingArtifactKind,
+        excluding meetingID: UUID
+    ) throws -> Bool {
+        let column: String
+        switch kind {
+        case .notes:
+            column = "notes_sha256"
+        case .receipt:
+            column = "receipt_image_sha256"
+        case .environmentPhoto:
+            column = "photo_image_sha256"
+        }
+        let rows = try database.query(
+            """
+            SELECT id FROM offline_meetings
+             WHERE \(column) = ?
+               AND id != ?
+               AND audit_status != ?
+             LIMIT 1;
+            """,
+            [.text(sha256), .text(meetingID.uuidString), .text(OfflineMeetingAuditStatus.abandoned.rawValue)]
+        )
+        return !rows.isEmpty
+    }
+
     private static func meetingBindings(_ record: OfflineMeetingRecord) -> [SQLiteValue] {
         [
             .text(record.id.uuidString),
@@ -109,6 +140,8 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
             record.punchOutUTC.map { .text(LedgerISO8601.string(from: $0)) } ?? .null,
             .double(record.punchInMonotonic),
             record.punchOutMonotonic.map { .double($0) } ?? .null,
+            .double(record.punchInUptime),
+            record.punchOutUptime.map { .double($0) } ?? .null,
             .integer(Int64(record.durationSeconds.rounded(.down))),
             .text(record.bootSessionUUID),
             .text(record.agendaNotes),
@@ -155,6 +188,8 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
             punchOutUTC: textDate(row["punch_out_time"]),
             punchInMonotonic: double(row["punch_in_monotonic"]),
             punchOutMonotonic: optionalDouble(row["punch_out_monotonic"]),
+            punchInUptime: optionalDouble(row["punch_in_uptime"]),
+            punchOutUptime: optionalDouble(row["punch_out_uptime"]),
             durationSeconds: Double(int(row["duration_seconds"])),
             bootSessionUUID: boot,
             agendaNotes: agenda,

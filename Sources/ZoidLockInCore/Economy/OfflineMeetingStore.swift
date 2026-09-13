@@ -8,6 +8,7 @@ public protocol OfflineMeetingStoring: Sendable {
     func recordingMeeting() throws -> OfflineMeetingRecord?
     func meetingsEligibleForPurge(at now: Date) throws -> [OfflineMeetingRecord]
     func markArtifactsPurged(id: UUID, at date: Date) throws
+    func hasRegisteredArtifactHash(_ sha256: String, kind: MeetingArtifactKind, excluding meetingID: UUID) throws -> Bool
 }
 
 /// Deterministic in-memory adapter used by coordinator tests.
@@ -18,7 +19,10 @@ public final class InMemoryOfflineMeetingStore: OfflineMeetingStoring, @unchecke
     public init() {}
 
     public func upsert(_ record: OfflineMeetingRecord) throws {
-        withLock { records[record.id] = record }
+        try withLock {
+            try Self.rejectDuplicateHashes(record, existing: Array(records.values))
+            records[record.id] = record
+        }
     }
 
     public func meeting(id: UUID) throws -> OfflineMeetingRecord? {
@@ -57,6 +61,37 @@ public final class InMemoryOfflineMeetingStore: OfflineMeetingStoring, @unchecke
             record.photoLocalPath = nil
             record.artifactsPurgedAt = date
             records[id] = record
+        }
+    }
+
+    public func hasRegisteredArtifactHash(
+        _ sha256: String,
+        kind: MeetingArtifactKind,
+        excluding meetingID: UUID
+    ) throws -> Bool {
+        withLock {
+            records.values.contains { other in
+                other.id != meetingID
+                    && other.auditStatus != .abandoned
+                    && other.sha256(for: kind) == sha256
+            }
+        }
+    }
+
+    private static func rejectDuplicateHashes(
+        _ record: OfflineMeetingRecord,
+        existing: [OfflineMeetingRecord]
+    ) throws {
+        for kind in [MeetingArtifactKind.receipt, .environmentPhoto] {
+            guard let sha = record.sha256(for: kind) else { continue }
+            let collision = existing.contains { other in
+                other.id != record.id
+                    && other.auditStatus != .abandoned
+                    && other.sha256(for: kind) == sha
+            }
+            if collision {
+                throw OfflineMeetingError.duplicateArtifact(kind)
+            }
         }
     }
 

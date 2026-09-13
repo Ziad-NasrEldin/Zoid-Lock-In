@@ -8,6 +8,7 @@ public enum ExchangeEngineError: Error, Equatable, Sendable {
     case insufficientCredits(need: Double, have: Double)
     case curfew
     case alreadyReconciled
+    case offlineMeetingActive
 }
 
 extension ExchangeEngineError: LocalizedError {
@@ -31,6 +32,8 @@ extension ExchangeEngineError: LocalizedError {
             return "Curfew is active (22:00–03:59). Entertainment and food amenity purchases are locked."
         case .alreadyReconciled:
             return "That local day has already been reconciled"
+        case .offlineMeetingActive:
+            return "A digital focus block cannot run while an offline meeting is punched in."
         }
     }
 }
@@ -47,11 +50,12 @@ public final class ExchangeEngine: @unchecked Sendable {
     private let focusClock: any MonotonicTimeProviding
     private let wallClock: any WallClockProviding
     private let activityDetector: any ActivityDetecting
-    private let timeTravel: TimeTravelGuard
+    public let timeTravel: TimeTravelGuard
     private let lock = NSRecursiveLock()
 
     private var liveSession: FocusSessionRecord?
     private var lastTickMonotonic: TimeInterval?
+    private var offlineMeetingRecording = false
 
     public init(
         ledger: any EconomicLedger,
@@ -88,6 +92,31 @@ public final class ExchangeEngine: @unchecked Sendable {
         timeTravel.isTampered
     }
 
+    public var isOfflineMeetingRecording: Bool {
+        withLock { offlineMeetingRecording }
+    }
+
+    /// Concludes an active/grace focus block, then holds the meeting mutex.
+    public func beginOfflineMeeting() throws {
+        try withLock {
+            try observeClocksLocked()
+            try ensureWritableLocked()
+            if let session = liveSession, session.state == .active || session.state == .pausedGrace {
+                _ = try completeFocus()
+            }
+            offlineMeetingRecording = true
+        }
+    }
+
+    /// Restores the mutex after relaunch when a meeting is still punched in.
+    public func beginOfflineMeetingIgnoringFocus() {
+        withLock { offlineMeetingRecording = true }
+    }
+
+    public func endOfflineMeeting() {
+        withLock { offlineMeetingRecording = false }
+    }
+
     public func wallTime() -> Date {
         wallClock.now()
     }
@@ -119,6 +148,9 @@ public final class ExchangeEngine: @unchecked Sendable {
             try observeClocksLocked()
             try ensureWritableLocked()
             try reconcileIfNeededLocked()
+            if offlineMeetingRecording {
+                throw ExchangeEngineError.offlineMeetingActive
+            }
             if let liveSession, liveSession.state == .active || liveSession.state == .pausedGrace {
                 throw ExchangeEngineError.focusAlreadyActive
             }
@@ -479,6 +511,10 @@ public final class ExchangeEngine: @unchecked Sendable {
         if session.state == .completed || session.state == .abandoned {
             return
         }
+        if offlineMeetingRecording {
+            lastTickMonotonic = focusClock.nowSeconds()
+            return
+        }
 
         let nowMono = focusClock.nowSeconds()
         let idle = activityDetector.secondsSinceLastPhysicalEvent()
@@ -520,6 +556,7 @@ public final class ExchangeEngine: @unchecked Sendable {
     }
 
     private func mintUnpaidLocked(_ session: inout FocusSessionRecord) throws {
+        guard !offlineMeetingRecording else { return }
         let due = FocusMinting.baseCredits(elapsedSeconds: session.elapsedSeconds)
         let already = session.creditsEarned
         let delta = CreditMath.normalize(due - already)
