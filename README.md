@@ -1,28 +1,43 @@
 # Zoid Lock In
 
-An uncompromising, local-first personal economy and discipline engine built for macOS.
+Earn your distractions. A local-first macOS discipline engine that starts every day at zero credits — deep work unlocks Steam, social, delivery apps, and the rest.
 
-Zoid Lock In eliminates procrastination through artificial scarcity, daily midnight resets, hard digital application/domain locking, and a high-friction anti-cheating protocol.
+Built for creators and operators who want hard lockdowns on their own Mac, not another soft blocker they can dismiss when willpower dips. Shares the proven local time-tracking DNA from [Zoid 0](https://github.com/Ziad-NasrEldin/Zoid-Zero), as its own standalone product.
 
-It is built as an independent standalone product while integrating the proven local workspace time-tracking, duration counters, and meeting observation engines from Zoid 0.
+<p align="center">
+  <img src="screenshots/menubar_ticker_proof.png" alt="Zoid Lock In menu bar ticker with live credits" width="720" />
+</p>
 
-## Core Features
-- **Daily Credit Economy:** Starts at 0 credits every morning. Verified deep work earns credits required to unlock entertainment, leisure, food delivery, and basic comforts.
-- **The 90-Minute Momentum Rule:** Completing the day's first continuous 90-minute focus block applies a 2.0x multiplier to morning work.
-- **Customizable Micro-Habits:** Flexible daily discipline routines (e.g., brushing teeth for +0.25 credits) managed via the dashboard.
-- **Triple-Gate Offline Meeting Verification:** Real-time punch-in/out timers plus mandatory evidence audited multimodally via Gemini API (with a 3-rejection appeal threshold).
-- **Permanent Friday Rest Day:** Hardcoded zero-cost rest day for basic amenities; permanently locked against modification.
-- **Hard Digital Lockdown:** Blocks Steam, Discord, game launchers, YouTube, Reddit, social media, and food delivery portals (Talabat, Uber Eats) by default on Mac and phone.
-- **Cross-Device Shield:** Integrated with Apple Shortcuts and Focus Modes to silence mobile distractions.
-- **Anti-Cheating Admin Gateway:** 12+ character password, Google Authenticator (TOTP) 2FA, automated warning email dispatch, and a 48-hour cooldown lockout on configuration changes.
-- **Curfew & Vault:** 10:00 PM evening lockout for entertainment purchases. Unspent midnight credits convert into a permanent Lifetime Surplus Vault stat and advance the Daily Victory Streak.
-- **Deficit Strikes & Disciplinary Carry-Over:** Finishing below the 3.0 credit baseline logs a strike and levies a -1.0 credit (-1 hour work debt) on the following day.
-- **Emergency Safety Valve:** Friction-free 30-minute bypass for true emergencies backed by an audit trail and a 2-hour next-day work debt.
-- **Dual Surface macOS Interface:** Persistent Menu Bar companion for live metrics and quick unblocks, paired with a full standalone command dashboard rendered in the SUMI-E Ink aesthetic.
+<p align="center">
+  <img src="screenshots/marketplace_proof.png" alt="Trading Center marketplace — spend credits to unlock amenities" width="720" />
+</p>
 
-## Specifications
-Read the full product and architectural specification in [PRODUCT.md](PRODUCT.md).
+## What you get
+
+- **Daily credit economy** — mornings start at 0; verified deep work mints credits you spend on entertainment, leisure, and delivery
+- **90-minute momentum rule** — finish the first continuous morning focus block and earn a 2× multiplier
+- **Hard digital lockdown** — Steam, Discord, YouTube, Reddit, Talabat, Uber Eats, and more blocked by default on Mac (and phone via Shortcuts / Focus)
+- **Menu bar + dashboard** — live metrics and quick unblocks in the bar; full Trading Center UI in a SUMI-E Ink aesthetic
+- **Anti-cheat admin** — long password, TOTP 2FA, warning email, and a cooldown before config changes stick
+- **Curfew & vault** — entertainment purchases cut off at 10 PM; leftover credits roll into a Lifetime Surplus Vault and streak
+
+## Try it
+
+Native Mac app (Swift Package). You need a recent macOS and Xcode / Swift toolchain.
+
+```sh
+swift test
+swift build
+```
+
+Open the built app from `.build/`, grant the permissions it asks for (Focus / Shortcuts on phone if you want the cross-device shield), and start the day at zero.
+
+Full product and architecture notes live in [`PRODUCT.md`](PRODUCT.md), [`PRD.md`](PRD.md), and [`SPEC.md`](SPEC.md).
+
+<p align="center">
+  <img src="screenshots/mobile_shield_proof.png" alt="Mobile shield via Apple Shortcuts and Focus Modes" width="480" />
+</p>
 
 ---
 
-Built by [Ziad Ahmed](https://github.com/Ziad-NasrEldin) at [MaVoid](https://mavoid.com).
+[MaVoid](https://mavoid.com) · [LinkedIn](https://linkedin.com/in/ziad-ahmed-634202332) · [GitHub](https://github.com/Ziad-NasrEldin)
