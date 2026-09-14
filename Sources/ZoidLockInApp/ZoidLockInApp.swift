@@ -27,6 +27,10 @@ enum ZoidLockInAppEntry {
             renderGeminiAuditProofAndExit()
             return
         }
+        if CommandLine.arguments.contains("--render-micro-habits-proof") {
+            renderMicroHabitsProofAndExit()
+            return
+        }
         ZoidLockInMenuBarApp.main()
     }
 
@@ -94,6 +98,19 @@ enum ZoidLockInAppEntry {
             exit(1)
         }
     }
+
+    @MainActor
+    private static func renderMicroHabitsProofAndExit() {
+        do {
+            try MicroHabitsProofRenderer.renderPNG()
+            FileHandle.standardError.write(
+                Data("Wrote \(MicroHabitsProofRenderer.defaultProofURL.path)\n".utf8)
+            )
+        } catch {
+            FileHandle.standardError.write(Data("Micro-habits proof render failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
 }
 
 struct ZoidLockInMenuBarApp: App {
@@ -105,12 +122,15 @@ struct ZoidLockInMenuBarApp: App {
                 snapshot: session.marketplace,
                 onPurchase: session.purchase,
                 meeting: session.meeting,
+                habits: session.habits,
                 onPunchToggle: session.punchToggle,
                 onSubmitMeeting: session.submitMeeting,
                 onAbandonMeeting: session.abandonMeeting,
                 onImportArtifact: session.importArtifact,
                 onRetryAudit: session.retryMeetingAudit,
-                onAppeal: session.appealMeeting
+                onAppeal: session.appealMeeting,
+                onCompleteHabit: session.completeHabit,
+                onCreateHabit: session.createHabit
             )
         } label: {
             MenuBarTickerLabel(snapshot: session.snapshot)
@@ -124,6 +144,7 @@ final class MenuBarSession: ObservableObject {
     @Published var snapshot: MenuBarTickerSnapshot
     @Published var marketplace: MarketplaceSnapshot
     @Published var meeting: OfflineMeetingSnapshot
+    @Published var habits: MicroHabitsSnapshot
 
     private let coordinator: EconomyTickCoordinator
     private let marketplaceCoordinator: MarketplaceCoordinator
@@ -131,6 +152,7 @@ final class MenuBarSession: ObservableObject {
     private let meetings: OfflineSessionCoordinator
     private let auditor: OfflineMeetingAuditCoordinator
     private let purge: MeetingArtifactPurgeScheduler
+    private let habitCoordinator: MicroHabitCoordinator
     private let client: XPCEnforcementClient
     private let economyQueue: DispatchQueue
     nonisolated(unsafe) private var timer: DispatchSourceTimer?
@@ -179,6 +201,17 @@ final class MenuBarSession: ObservableObject {
             timeTravel: timeTravel
         )
         meetings.bindFocusEngine(engine)
+        let habitGovernance = GovernanceLockCoordinator(
+            store: resolved,
+            clock: MachContinuousTimeClock(),
+            wallClock: SystemWallClock(),
+            timeTravel: timeTravel
+        )
+        let habitCoordinator = MicroHabitCoordinator(
+            store: resolved,
+            engine: engine,
+            governance: habitGovernance
+        )
         let auditor = OfflineMeetingAuditCoordinator(
             store: resolved,
             artifacts: artifactStore,
@@ -198,17 +231,19 @@ final class MenuBarSession: ObservableObject {
         self.meetings = meetings
         self.auditor = auditor
         self.purge = purge
+        self.habitCoordinator = habitCoordinator
         self.client = client
         self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
         let initial = (try? engine.snapshot()) ?? .proof
         self.snapshot = initial
         self.marketplace = MarketplaceSnapshot.assemble(ticker: initial)
         self.meeting = meetings.snapshot()
+        self.habits = habitCoordinator.snapshot(ticker: initial)
 
         let coalescer = TickCoalescer()
         let timer = DispatchSource.makeTimerSource(queue: economyQueue)
         timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
-        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield, meetings, purge] in
+        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield, meetings, purge, habitCoordinator] in
             guard coalescer.begin() else { return }
             Task {
                 defer { coalescer.end() }
@@ -230,10 +265,12 @@ final class MenuBarSession: ObservableObject {
                 )
                 _ = try? purge.purgeExpired()
                 let meetingSnap = meetings.snapshot()
+                let habitSnap = habitCoordinator.snapshot(ticker: next)
                 await MainActor.run { [weak self] in
                     self?.snapshot = next
                     self?.marketplace = market
                     self?.meeting = meetingSnap
+                    self?.habits = habitSnap
                 }
             }
         }
@@ -324,6 +361,7 @@ final class MenuBarSession: ObservableObject {
                 status: nil,
                 mobileShield: marketplace.mobileShield
             )
+            habits = habitCoordinator.snapshot(ticker: next)
         }
     }
 
@@ -349,6 +387,42 @@ final class MenuBarSession: ObservableObject {
             _ = error
         }
         meeting = meetings.snapshot()
+    }
+
+    func completeHabit(_ id: UUID) {
+        do {
+            _ = try habitCoordinator.complete(habitID: id)
+        } catch {
+            _ = error
+        }
+        refreshHabits()
+    }
+
+    func createHabit(_ title: String, reward: Double, frequency: Int) {
+        do {
+            _ = try habitCoordinator.createHabit(
+                title: title,
+                rewardCredits: reward,
+                dailyFrequencyLimit: frequency
+            )
+        } catch {
+            _ = error
+        }
+        refreshHabits()
+    }
+
+    private func refreshHabits() {
+        if let next = try? marketplaceCoordinator.engine.snapshot() {
+            snapshot = next
+            marketplace = marketplaceCoordinator.assemble(
+                ticker: next,
+                status: nil,
+                mobileShield: marketplace.mobileShield
+            )
+            habits = habitCoordinator.snapshot(ticker: next)
+        } else {
+            habits = habitCoordinator.snapshot(ticker: snapshot)
+        }
     }
 
     deinit {

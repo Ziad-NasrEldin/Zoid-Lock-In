@@ -31,6 +31,22 @@ public final class TimeTravelGuard: @unchecked Sendable {
         return lastSkew
     }
 
+    public var hasOrigin: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return originWall != nil && originMonotonic != nil
+    }
+
+    /// Restores a persisted origin so a wall jump while the app was quit is still caught.
+    public func restoreOriginIfNeeded(wall: Date, monotonic: TimeInterval) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard originWall == nil, originMonotonic == nil else { return }
+        originWall = wall
+        originMonotonic = monotonic
+        lastSkew = 0
+    }
+
     @discardableResult
     public func observe(wall: Date, monotonic: TimeInterval) -> TimeInterval {
         lock.lock()

@@ -162,6 +162,53 @@ public final class ExchangeEngine: @unchecked Sendable {
         }
     }
 
+    /// Idempotent, daily-capped `EARNED_HABIT` mint bound to `habit:<completionID>`.
+    @discardableResult
+    public func mintEarnedHabit(
+        completionID: UUID,
+        amount: Double,
+        habitTitle: String = ""
+    ) throws -> HabitCreditMintOutcome {
+        try withLock {
+            try observeClocksLocked()
+            try ensureWritableLocked()
+            return try ledger.performAtomically {
+                try mintEarnedHabitBodyLocked(
+                    completionID: completionID,
+                    amount: amount,
+                    habitTitle: habitTitle
+                )
+            }
+        }
+    }
+
+    /// Mints habit credits and runs `body` in the same `BEGIN IMMEDIATE` (engine lock first).
+    public func mintEarnedHabitAndThen<T>(
+        completionID: UUID,
+        amount: Double,
+        habitTitle: String = "",
+        _ body: (HabitCreditMintOutcome) throws -> T
+    ) throws -> T {
+        try withLock {
+            try observeClocksLocked()
+            try ensureWritableLocked()
+            return try ledger.performAtomically {
+                let outcome = try mintEarnedHabitBodyLocked(
+                    completionID: completionID,
+                    amount: amount,
+                    habitTitle: habitTitle
+                )
+                return try body(outcome)
+            }
+        }
+    }
+
+    public func earnedHabitCredits(onLocalDay day: String) throws -> Double {
+        try withLock {
+            try earnedHabitCreditsOnLocalDayLocked(day)
+        }
+    }
+
     private func mintEarnedMeetingBodyLocked(
         meetingID: UUID,
         durationSeconds: TimeInterval
@@ -253,6 +300,102 @@ public final class ExchangeEngine: @unchecked Sendable {
         let txs = try ledger.transactions(onLocalDay: day, clock: civilClock)
         return CreditMath.normalize(
             txs.filter { $0.transactionType == .earnedMeeting }
+                .reduce(0) { $0 + $1.amount }
+        )
+    }
+
+    private func mintEarnedHabitBodyLocked(
+        completionID: UUID,
+        amount requestedRaw: Double,
+        habitTitle: String
+    ) throws -> HabitCreditMintOutcome {
+        let reference = HabitCreditMinting.walletReference(completionID: completionID)
+        let requested = CreditMath.normalize(requestedRaw)
+        let day = civilClock.dayKey(wallClock.now())
+        if let existing = try existingEarnedHabitLocked(reference: reference) {
+            let earnedToday = try earnedHabitCreditsOnLocalDayLocked(day)
+            return HabitCreditMintOutcome(
+                transaction: existing,
+                creditsMinted: existing.amount,
+                requestedCredits: requested,
+                clipped: false,
+                dailyEarnedAfter: earnedToday,
+                explanation: nil
+            )
+        }
+
+        let earnedToday = try earnedHabitCreditsOnLocalDayLocked(day)
+        let remaining = HabitCreditMinting.remainingDailyBudget(earnedToday: earnedToday)
+        let amount = HabitCreditMinting.clippedCredits(requested: requested, earnedToday: earnedToday)
+        let clipped = requested > 0 && amount + 0.000_1 < requested
+        let explanation: String?
+        if remaining <= 0 && requested > 0 {
+            explanation = "Daily habit credit cap of \(CreditMath.displayString(HabitCreditMinting.dailyCreditCap)) already reached; no credits minted."
+        } else if clipped {
+            explanation = "Clipped habit credits from \(CreditMath.displayString(requested)) to \(CreditMath.displayString(amount)) (daily EARNED_HABIT cap \(CreditMath.displayString(HabitCreditMinting.dailyCreditCap)))."
+        } else {
+            explanation = nil
+        }
+
+        guard amount > 0 else {
+            return HabitCreditMintOutcome(
+                transaction: nil,
+                creditsMinted: 0,
+                requestedCredits: requested,
+                clipped: clipped || (requested > 0 && remaining <= 0),
+                dailyEarnedAfter: earnedToday,
+                explanation: explanation
+            )
+        }
+
+        do {
+            let balance = try ledger.latestBalance()
+            let next = CreditMath.normalize(balance + amount)
+            let titleNote = habitTitle.isEmpty ? "" : " \(habitTitle)"
+            let clipNote = clipped ? " clipped from \(CreditMath.displayString(requested))" : ""
+            let transaction = WalletTransaction(
+                timestamp: wallClock.now(),
+                amount: amount,
+                balanceAfter: next,
+                transactionType: .earnedHabit,
+                referenceID: reference,
+                description: "EARNED_HABIT +\(CreditMath.displayString(amount))\(titleNote)\(clipNote)"
+            )
+            try ledger.appendTransaction(transaction)
+            return HabitCreditMintOutcome(
+                transaction: transaction,
+                creditsMinted: amount,
+                requestedCredits: requested,
+                clipped: clipped,
+                dailyEarnedAfter: CreditMath.normalize(earnedToday + amount),
+                explanation: explanation
+            )
+        } catch EconomicLedgerError.duplicateTransaction {
+            if let existing = try existingEarnedHabitLocked(reference: reference) {
+                let earned = try earnedHabitCreditsOnLocalDayLocked(day)
+                return HabitCreditMintOutcome(
+                    transaction: existing,
+                    creditsMinted: existing.amount,
+                    requestedCredits: requested,
+                    clipped: false,
+                    dailyEarnedAfter: earned,
+                    explanation: nil
+                )
+            }
+            throw EconomicLedgerError.duplicateTransaction
+        }
+    }
+
+    private func existingEarnedHabitLocked(reference: String) throws -> WalletTransaction? {
+        try ledger.allTransactions().first { transaction in
+            transaction.transactionType == .earnedHabit && transaction.referenceID == reference
+        }
+    }
+
+    private func earnedHabitCreditsOnLocalDayLocked(_ day: String) throws -> Double {
+        let txs = try ledger.transactions(onLocalDay: day, clock: civilClock)
+        return CreditMath.normalize(
+            txs.filter { $0.transactionType == .earnedHabit }
                 .reduce(0) { $0 + $1.amount }
         )
     }

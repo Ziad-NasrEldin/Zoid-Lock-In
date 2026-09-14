@@ -63,9 +63,20 @@ public enum AmenityKind: String, Sendable, Equatable, Codable, CaseIterable, Has
 public struct AmenityCatalog: Sendable, Equatable {
     public static let standard = AmenityCatalog()
 
-    public init() {}
+    public var priceOverrides: [AmenityKind: Double]
+
+    public init(priceOverrides: [AmenityKind: Double] = [:]) {
+        self.priceOverrides = priceOverrides
+    }
 
     public func standardCost(of kind: AmenityKind) -> Double {
+        if let override = priceOverrides[kind] {
+            return CreditMath.normalize(override)
+        }
+        return intrinsicCost(of: kind)
+    }
+
+    public func intrinsicCost(of kind: AmenityKind) -> Double {
         switch kind {
         case .bed: return 3.0
         case .food: return 2.5

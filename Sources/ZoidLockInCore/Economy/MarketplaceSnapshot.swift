@@ -109,7 +109,7 @@ public struct MarketplaceSnapshot: Sendable, Equatable {
     }
 
     public var formattedBalance: String {
-        String(format: "%0.1f", spendableBalance)
+        CreditMath.displayString(spendableBalance)
     }
 
     public var formattedVault: String {

@@ -153,7 +153,7 @@ public struct DomainFilterRules: Sendable, Equatable {
         }
     }
 
-    static func normalize(_ value: String) -> String {
+    public static func normalize(_ value: String) -> String {
         var normalized = value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()

@@ -1,10 +1,11 @@
 import SwiftUI
 import ZoidLockInCore
 
-/// Menu Bar extra content. Marketplace plus the Offline Meeting sheet.
+/// Menu Bar extra content. Marketplace, Offline Meeting, and Micro-Habits.
 public struct MenuBarExtraView: View {
     public var snapshot: MarketplaceSnapshot
     public var meeting: OfflineMeetingSnapshot
+    public var habits: MicroHabitsSnapshot
     public var onPurchase: ((AmenityKind) -> Void)?
     public var onPunchToggle: (() -> Void)?
     public var onSubmitMeeting: (() -> Void)?
@@ -12,22 +13,29 @@ public struct MenuBarExtraView: View {
     public var onImportArtifact: ((MeetingArtifactKind, URL) -> Void)?
     public var onRetryAudit: (() -> Void)?
     public var onAppeal: ((String) -> Void)?
+    public var onCompleteHabit: ((UUID) -> Void)?
+    public var onCreateHabit: ((String, Double, Int) -> Void)?
 
-    @State private var surface: MenuBarCompanionSurface = .market
+    @State private var surface: MenuBarCompanionSurface
 
     public init(
         snapshot: MarketplaceSnapshot,
         onPurchase: ((AmenityKind) -> Void)? = nil,
         meeting: OfflineMeetingSnapshot = .idle,
+        habits: MicroHabitsSnapshot = .empty,
         onPunchToggle: (() -> Void)? = nil,
         onSubmitMeeting: (() -> Void)? = nil,
         onAbandonMeeting: (() -> Void)? = nil,
         onImportArtifact: ((MeetingArtifactKind, URL) -> Void)? = nil,
         onRetryAudit: (() -> Void)? = nil,
-        onAppeal: ((String) -> Void)? = nil
+        onAppeal: ((String) -> Void)? = nil,
+        onCompleteHabit: ((UUID) -> Void)? = nil,
+        onCreateHabit: ((String, Double, Int) -> Void)? = nil,
+        initialSurface: MenuBarCompanionSurface = .market
     ) {
         self.snapshot = snapshot
         self.meeting = meeting
+        self.habits = habits
         self.onPurchase = onPurchase
         self.onPunchToggle = onPunchToggle
         self.onSubmitMeeting = onSubmitMeeting
@@ -35,6 +43,9 @@ public struct MenuBarExtraView: View {
         self.onImportArtifact = onImportArtifact
         self.onRetryAudit = onRetryAudit
         self.onAppeal = onAppeal
+        self.onCompleteHabit = onCompleteHabit
+        self.onCreateHabit = onCreateHabit
+        _surface = State(initialValue: initialSurface)
     }
 
     public var body: some View {
@@ -43,7 +54,7 @@ public struct MenuBarExtraView: View {
             Group {
                 if surface == .market {
                     MarketplacePopoverView(snapshot: snapshot, onPurchase: onPurchase)
-                } else {
+                } else if surface == .meeting {
                     OfflineMeetingPopoverView(
                         snapshot: meeting,
                         onPunchToggle: onPunchToggle,
@@ -52,6 +63,12 @@ public struct MenuBarExtraView: View {
                         onImportArtifact: onImportArtifact,
                         onRetryAudit: onRetryAudit,
                         onAppeal: onAppeal
+                    )
+                } else {
+                    MicroHabitsPopoverView(
+                        snapshot: habits,
+                        onComplete: onCompleteHabit,
+                        onCreate: onCreateHabit
                     )
                 }
             }
@@ -62,7 +79,8 @@ public struct MenuBarExtraView: View {
     private var surfaceSwitcher: some View {
         HStack(spacing: 0) {
             switcherTab("市  MARKET", surface: .market)
-            switcherTab("会  MEETING", surface: .meeting)
+            switcherTab("会  MEET", surface: .meeting)
+            switcherTab("習  HABIT", surface: .habits)
         }
         .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
         .padding(.horizontal, 22)

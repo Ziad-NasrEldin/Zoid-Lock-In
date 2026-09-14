@@ -336,6 +336,13 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             """
         )
         try database.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_wallet_earned_habit_ref
+            ON wallet_transactions(reference_id)
+            WHERE transaction_type = 'EARNED_HABIT' AND reference_id IS NOT NULL;
+            """
+        )
+        try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_focus_sessions_state ON focus_sessions(state);"
         )
         try database.execute(
@@ -453,6 +460,70 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             BEGIN
                 SELECT RAISE(ABORT, 'offline_meetings evidence is immutable after submit');
             END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS micro_habits (
+                id TEXT PRIMARY KEY,
+                title TEXT NOT NULL,
+                reward_credits REAL NOT NULL,
+                daily_frequency_limit INTEGER NOT NULL DEFAULT 1,
+                is_enabled INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS micro_habit_completions (
+                id TEXT PRIMARY KEY,
+                habit_id TEXT NOT NULL REFERENCES micro_habits(id),
+                civil_date TEXT NOT NULL,
+                credits_awarded REAL NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            """
+        )
+        try database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_habit_completions_habit_date ON micro_habit_completions(habit_id, civil_date);"
+        )
+        try database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_habit_completions_date ON micro_habit_completions(civil_date);"
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS governance_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                last_configuration_mutation_at TEXT,
+                last_configuration_mutation_monotonic REAL,
+                boot_session_uuid TEXT,
+                last_observed_wall TEXT,
+                last_observed_monotonic REAL,
+                last_observed_boot_session_uuid TEXT,
+                accrued_monotonic_elapsed REAL NOT NULL DEFAULT 0
+            );
+            """
+        )
+        try database.execute(
+            "INSERT OR IGNORE INTO governance_state (id, accrued_monotonic_elapsed) VALUES (1, 0);"
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS amenity_price_overrides (
+                amenity_kind TEXT PRIMARY KEY,
+                cost_credits REAL NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS blocklist_rules (
+                suffix TEXT PRIMARY KEY,
+                created_at TEXT NOT NULL
+            );
             """
         )
     }

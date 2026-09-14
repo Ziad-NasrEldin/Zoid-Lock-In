@@ -4,6 +4,7 @@ import Foundation
 public enum WalletTransactionType: String, Sendable, Equatable, Codable {
     case mint
     case earnedMeeting = "EARNED_MEETING"
+    case earnedHabit = "EARNED_HABIT"
     case spend
     case refund = "refund_amenity"
     case penalty
@@ -13,7 +14,7 @@ public enum WalletTransactionType: String, Sendable, Equatable, Codable {
     /// Credits that count toward the daily 3.0 target.
     public var countsAsDailyEarned: Bool {
         switch self {
-        case .mint, .earnedMeeting:
+        case .mint, .earnedMeeting, .earnedHabit:
             return true
         case .spend, .refund, .penalty, .reset, .surplusTransfer:
             return false
@@ -172,13 +173,29 @@ public enum EconomicLedgerError: Error, Equatable, Sendable {
     case sqlite(code: Int32, message: String)
 }
 
-/// Half-credit rounding used by the wallet.
+/// Wallet rounding. Slice 8 needs hundredths so +0.25 micro-habits stay exact.
 public enum CreditMath: Sendable {
+    public static let scale: Double = 100
+
     public static func normalize(_ value: Double) -> Double {
-        (value * 10).rounded() / 10
+        (value * scale).rounded() / scale
     }
 
     public static func spendable(_ balance: Double) -> Double {
         max(0, normalize(balance))
+    }
+
+    /// `0.5` / `1.5` stay one decimal; `0.25` keeps two.
+    public static func displayString(_ value: Double) -> String {
+        let normalized = normalize(value)
+        let hundredths = Int((normalized * 100).rounded())
+        if hundredths % 10 == 0 {
+            return String(format: "%0.1f", normalized)
+        }
+        return String(format: "%0.2f", normalized)
+    }
+
+    public static func feedbackCaption(_ amount: Double) -> String {
+        "+\(displayString(amount))c"
     }
 }

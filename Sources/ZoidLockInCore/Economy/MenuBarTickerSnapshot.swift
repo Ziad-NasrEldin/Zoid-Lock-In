@@ -56,7 +56,7 @@ public struct MenuBarTickerSnapshot: Sendable, Equatable {
     }
 
     public var formattedBalance: String {
-        String(format: "%0.1f", walletBalance)
+        CreditMath.displayString(walletBalance)
     }
 
     public var formattedElapsed: String {
