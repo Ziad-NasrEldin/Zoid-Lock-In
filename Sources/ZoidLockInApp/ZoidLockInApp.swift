@@ -377,10 +377,10 @@ final class MenuBarSession: ObservableObject {
         }
 
         let coalescer = TickCoalescer()
-        let timer = DispatchSource.makeTimerSource(queue: economyQueue)
+        let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
-        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield, meetings, purge, habitCoordinator, calibration, habitGovernance, ledger = resolved, cache, gatekeeper] in
-            guard coalescer.begin() else { return }
+        timer.setEventHandler { [weak self, coordinator, client, marketplaceCoordinator, shield, meetings, purge, habitCoordinator, calibration, habitGovernance, ledger = resolved, cache, gatekeeper] in
+            guard let self, coalescer.begin() else { return }
             Task {
                 defer { coalescer.end() }
                 let next = await coordinator.reconcileIncidentsAndTick(
@@ -414,14 +414,12 @@ final class MenuBarSession: ObservableObject {
                     emergencyDebtCredits: cache.unleviedIncidents().reduce(0) { $0 + $1.signedDebtCredits },
                     emergencyValveActive: status?.activePasses.contains { $0.kind == .emergency } == true
                 )
-                await MainActor.run { [weak self] in
-                    self?.snapshot = next
-                    self?.marketplace = market
-                    self?.meeting = meetingSnap
-                    self?.habits = habitSnap
-                    self?.dashboard = dash
-                    self?.publishCalibrationModeIfNeeded(calibrationSnap.enforcementMode)
-                }
+                self.snapshot = next
+                self.marketplace = market
+                self.meeting = meetingSnap
+                self.habits = habitSnap
+                self.dashboard = dash
+                self.publishCalibrationModeIfNeeded(calibrationSnap.enforcementMode)
             }
         }
         self.timer = timer
