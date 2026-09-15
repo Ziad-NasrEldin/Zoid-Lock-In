@@ -170,6 +170,7 @@ private struct MenuBarCompanionRoot: View {
             onCreateHabit: session.createHabit,
             onOpenDashboard: {
                 openWindow(id: "command-dashboard")
+                NSApp.activate(ignoringOtherApps: true)
             }
         )
     }
@@ -198,6 +199,9 @@ private struct CommandDashboardContainer: View {
                 }
             }
         )
+        .onAppear {
+            NSApp.activate(ignoringOtherApps: true)
+        }
     }
 }
 
