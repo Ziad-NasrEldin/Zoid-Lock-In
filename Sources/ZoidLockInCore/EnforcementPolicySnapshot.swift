@@ -91,9 +91,19 @@ public struct EnforcementPolicySnapshot: Sendable, Equatable, Codable {
         }
 
         // Bake defaults: caller-supplied whitelist is ignored (pass overlay only).
+        // Extra blacklist suffixes are unioned onto the baked list so Slice 8
+        // custom rules reach the filter without allowing a client to strip defaults.
         var policy = EnforcementPolicy.lockedDown
         policy.mode = .hard
         policy.inspectedPorts = essential.union(incomingPorts)
+        let extras = blacklistedSuffixes
+            .map { DomainFilterRules.normalize($0) }
+            .filter { suffix in
+                !suffix.isEmpty && !DomainFilterRules.defaultBlacklist.contains(suffix)
+            }
+        if !extras.isEmpty {
+            policy.domainRules = policy.domainRules.withAdditionalBlacklist(extras)
+        }
         return policy
     }
 }

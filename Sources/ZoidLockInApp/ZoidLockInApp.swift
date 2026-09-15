@@ -163,17 +163,36 @@ final class MenuBarSession: ObservableObject {
         let resolved = ledger ?? (try! SQLiteEconomicLedger())
         let cache = CachedEmergencyIncidentStore()
         let timeTravel = TimeTravelGuard()
+        let fallbackDirectory = resolved.fileURL?.deletingLastPathComponent()
+            ?? EncryptedStateStore.defaultApplicationSupportDirectory()
+        let habitGovernance = GovernanceLockCoordinator(
+            store: resolved,
+            clock: MachContinuousTimeClock(),
+            wallClock: SystemWallClock(),
+            timeTravel: timeTravel,
+            keyProvider: KeychainGovernanceKeyProvider(),
+            replicaSealStore: FileGovernanceSealStore(fallbackDirectory: fallbackDirectory)
+        )
+        let pinnedTimeZone = habitGovernance.pinnedTimeZone
         let engine = ExchangeEngine(
             ledger: resolved,
             incidentStore: cache,
             clock: MachContinuousTimeClock(),
             focusClock: MachUptimeClock(),
-            timeTravel: timeTravel
+            timeTravel: timeTravel,
+            timeZone: pinnedTimeZone,
+            habitWindow: resolved
         )
         let coordinator = EconomyTickCoordinator(engine: engine, incidentCache: cache)
         let client = XPCEnforcementClient()
         client.resume()
         client.startHeartbeatLoop()
+        habitGovernance.onBlocklistChanged = { rules in
+            let snapshot = EnforcementPolicySnapshot(EnforcementPolicy(domainRules: rules))
+            Task {
+                try? await client.applyPolicy(snapshot)
+            }
+        }
         let shieldStore = EncryptedStateStore(
             fallbackDirectory: EncryptedStateStore.defaultApplicationSupportDirectory(),
             keyProvider: KeychainMobileShieldKeyProvider(),
@@ -201,17 +220,13 @@ final class MenuBarSession: ObservableObject {
             timeTravel: timeTravel
         )
         meetings.bindFocusEngine(engine)
-        let habitGovernance = GovernanceLockCoordinator(
-            store: resolved,
-            clock: MachContinuousTimeClock(),
-            wallClock: SystemWallClock(),
-            timeTravel: timeTravel
-        )
         let habitCoordinator = MicroHabitCoordinator(
             store: resolved,
             engine: engine,
-            governance: habitGovernance
+            governance: habitGovernance,
+            timeZone: pinnedTimeZone
         )
+        habitGovernance.publishLiveSettings()
         let auditor = OfflineMeetingAuditCoordinator(
             store: resolved,
             artifacts: artifactStore,

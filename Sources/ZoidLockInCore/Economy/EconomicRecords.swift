@@ -167,6 +167,7 @@ public enum EconomicLedgerLocation: Sendable {
 /// Ledger-layer failures. Engine errors live on `ExchangeEngineError`.
 public enum EconomicLedgerError: Error, Equatable, Sendable {
     case appendOnly
+    case sealed
     case duplicateTransaction
     case duplicateReconciliation
     case invalidSchema

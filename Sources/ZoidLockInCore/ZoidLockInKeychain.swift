@@ -37,6 +37,9 @@ public struct ZoidLockInKeychain: KeychainDataStoring {
     public static let mobileShieldService = "com.mavoid.zoidlockin.mobile-shield"
     public static let mobileShieldKeyAccount = "com.mavoid.zoidlockin.mobile-shield.key"
     public static let mobileShieldHighWaterAccount = "com.mavoid.zoidlockin.mobile-shield.hw"
+    public static let governanceService = "com.mavoid.zoidlockin.governance"
+    public static let governanceKeyAccount = "com.mavoid.zoidlockin.governance.key"
+    public static let governanceSealAccount = "com.mavoid.zoidlockin.governance.seal"
     public static let geminiService = "com.mavoid.zoidlockin.gemini"
     public static let geminiAccount = "api_key"
 

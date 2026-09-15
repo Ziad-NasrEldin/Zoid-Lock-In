@@ -1,10 +1,10 @@
 import AppKit
 import Foundation
 import Testing
-import ZoidLockInCore
+@testable import ZoidLockInCore
 import ZoidLockInEconomy
 
-@Suite("Slice 8 micro-habits and 48-hour governance")
+@Suite("Slice 8 micro-habits and 48-hour governance", .serialized)
 struct Slice8MicroHabitsTests {
     @Test("CreditMath keeps hundredths so +0.25 habits stay exact")
     func creditMathKeepsHundredths() {
@@ -159,13 +159,28 @@ struct Slice8MicroHabitsTests {
         #expect(harness.governance.isCooldownBypassEnabled)
     }
 
-    @Test("ZOID_BYPASS_GOVERNANCE_COOLDOWN=1 allows automated test mutations")
+    @Test("ZOID_BYPASS_GOVERNANCE_COOLDOWN is debug-only; injected test hooks remain the test seam")
     func environmentBypassFlag() throws {
         let harness = HabitHarness(environment: ["ZOID_BYPASS_GOVERNANCE_COOLDOWN": "1"])
+        #expect(
+            GovernanceLockPolicy.isEnvironmentBypassEnabled(["ZOID_BYPASS_GOVERNANCE_COOLDOWN": "1"])
+                == GovernanceLockPolicy.isCompileTimeBypassAllowed
+        )
+        #if DEBUG
         _ = try harness.habits.createHabit(title: "Env One")
         _ = try harness.habits.createHabit(title: "Env Two")
         #expect(try harness.store.allHabits().count == 2)
         #expect(harness.governance.isCooldownBypassEnabled)
+        #else
+        #expect(harness.governance.isCooldownBypassEnabled == false)
+        _ = try harness.habits.createHabit(title: "Env One")
+        do {
+            _ = try harness.habits.createHabit(title: "Env Two")
+            Issue.record("release builds must ignore ZOID_BYPASS_GOVERNANCE_COOLDOWN")
+        } catch is GovernanceLockError {
+            ()
+        }
+        #endif
     }
 
     @Test("monotonic / time travel resistance: advancing wall clock cannot expire the lock")
@@ -293,6 +308,10 @@ struct Slice8MicroHabitsTests {
         #expect(proof.habits.contains { $0.statusCaption == "OFF" })
         #expect(proof.habits.contains { $0.canComplete && $0.lastFeedback == "+0.25c" })
         #expect(proof.formattedDailyCredits == "0.5 / 1.5")
+        #expect(proof.editorFieldsDisabled)
+        #expect(proof.editorReadOnlyCaption == MicroHabitsSnapshot.editorReadOnlyCaptionText)
+        #expect(proof.editorAllowsHitTesting == false)
+        #expect(proof.editorFieldOpacity < 1)
     }
 
     @MainActor
@@ -320,7 +339,7 @@ struct Slice8MicroHabitsTests {
     }
 }
 
-@Suite("Slice 8 adversarial hardening")
+@Suite("Slice 8 adversarial hardening", .serialized)
 struct Slice8AdversarialHardeningTests {
     @Test("EARNED_HABIT mint is idempotent for the same completion reference")
     func earnedHabitMintIsIdempotent() throws {
@@ -454,7 +473,8 @@ struct Slice8AdversarialHardeningTests {
             wallClock: wall,
             timeTravel: timeTravel,
             bootSessionUUID: "boot-b",
-            environment: [:]
+            environment: [:],
+            keyProvider: first.keyProvider
         )
         let habits = MicroHabitCoordinator(
             store: store,
@@ -522,6 +542,7 @@ final class HabitHarness: @unchecked Sendable {
     let engine: ExchangeEngine
     let governance: GovernanceLockCoordinator
     let habits: MicroHabitCoordinator
+    let keyProvider: InMemoryGovernanceKeyProvider
 
     init(
         year: Int = 2026,
@@ -533,50 +554,63 @@ final class HabitHarness: @unchecked Sendable {
         environment: [String: String] = [:],
         sqlite: SQLiteEconomicLedger? = nil,
         store: (any MicroHabitStoring & GovernanceStoring)? = nil,
-        boot: String = "boot-test"
+        ledger: (any EconomicLedger)? = nil,
+        boot: String = "boot-test",
+        timeZone: TimeZone = SliceTestCivil.timeZone,
+        wall: ManualWallClock? = nil,
+        mono: ManualMonotonicClock? = nil,
+        timeTravel: TimeTravelGuard? = nil,
+        keyProvider: InMemoryGovernanceKeyProvider? = nil,
+        replicaSealStore: (any GovernanceSealPersisting)? = nil
     ) {
-        let timeZone = SliceTestCivil.timeZone
         let civil = LocalCivilClock(timeZone: timeZone)
         let start = civil.date(year: year, month: month, day: day, hour: hour, minute: minute)
-        self.civil = civil
-        self.wall = ManualWallClock(start)
-        self.mono = ManualMonotonicClock()
-        self.timeTravel = TimeTravelGuard()
+        self.wall = wall ?? ManualWallClock(start)
+        self.mono = mono ?? ManualMonotonicClock()
+        self.timeTravel = timeTravel ?? TimeTravelGuard()
+        self.keyProvider = keyProvider ?? InMemoryGovernanceKeyProvider()
 
         if let sqlite {
             self.ledger = sqlite
             self.store = sqlite
         } else if let store {
-            self.ledger = InMemoryEconomicLedger()
+            self.ledger = ledger ?? InMemoryEconomicLedger()
             self.store = store
         } else {
-            self.ledger = InMemoryEconomicLedger()
+            self.ledger = ledger ?? InMemoryEconomicLedger()
             self.store = InMemoryMicroHabitStore()
         }
 
-        self.engine = ExchangeEngine(
-            ledger: self.ledger,
-            clock: mono,
-            focusClock: mono,
-            wallClock: wall,
-            timeTravel: timeTravel,
-            timeZone: timeZone
-        )
+        let testConfiguration = bypass ? GovernanceLockTestConfiguration(bypassCooldown: true) : nil
         self.governance = GovernanceLockCoordinator(
             store: self.store,
-            clock: mono,
-            wallClock: wall,
-            timeTravel: timeTravel,
+            clock: self.mono,
+            wallClock: self.wall,
+            timeTravel: self.timeTravel,
             bootSessionUUID: boot,
-            isCooldownBypassEnabled: bypass,
-            environment: environment
+            environment: environment,
+            keyProvider: self.keyProvider,
+            replicaSealStore: replicaSealStore,
+            pinnedTimeZone: timeZone,
+            testConfiguration: testConfiguration
+        )
+        let pinned = self.governance.pinnedTimeZone
+        self.civil = LocalCivilClock(timeZone: pinned)
+        self.engine = ExchangeEngine(
+            ledger: self.ledger,
+            clock: self.mono,
+            focusClock: self.mono,
+            wallClock: self.wall,
+            timeTravel: self.timeTravel,
+            timeZone: pinned,
+            habitWindow: self.store
         )
         self.habits = MicroHabitCoordinator(
             store: self.store,
             engine: engine,
             governance: governance,
-            wallClock: wall,
-            timeZone: timeZone
+            wallClock: self.wall,
+            timeZone: pinned
         )
     }
 

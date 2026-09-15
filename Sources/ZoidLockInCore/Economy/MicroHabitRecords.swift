@@ -36,19 +36,22 @@ public struct MicroHabitCompletion: Sendable, Equatable, Identifiable {
     public var civilDate: String
     public var creditsAwarded: Double
     public var createdAt: Date
+    public var createdMonotonic: TimeInterval
 
     public init(
         id: UUID = UUID(),
         habitID: UUID,
         civilDate: String,
         creditsAwarded: Double,
-        createdAt: Date
+        createdAt: Date,
+        createdMonotonic: TimeInterval = 0
     ) {
         self.id = id
         self.habitID = habitID
         self.civilDate = civilDate
         self.creditsAwarded = CreditMath.normalize(creditsAwarded)
         self.createdAt = createdAt
+        self.createdMonotonic = max(0, createdMonotonic)
     }
 }
 
@@ -98,6 +101,7 @@ public enum HabitCreditMinting: Sendable {
     public static let minDailyFrequency: Int = 1
     public static let maxDailyFrequency: Int = 2
     public static let maxTitleLength: Int = 80
+    public static let rollingWindowSeconds: TimeInterval = 86_400
 
     public static func walletReference(completionID: UUID) -> String {
         "habit:\(completionID.uuidString)"
@@ -109,6 +113,11 @@ public enum HabitCreditMinting: Sendable {
 
     public static func clippedCredits(requested: Double, earnedToday: Double) -> Double {
         CreditMath.normalize(min(max(0, requested), remainingDailyBudget(earnedToday: earnedToday)))
+    }
+
+    /// Conservative cap: civil-day earned and rolling 24h monotonic earned.
+    public static func cappedEarned(civilDay: Double, rollingWindow: Double) -> Double {
+        CreditMath.normalize(max(civilDay, rollingWindow))
     }
 
     public static func sanitizedTitle(_ raw: String) -> String? {

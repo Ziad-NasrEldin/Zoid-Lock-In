@@ -129,6 +129,14 @@ public struct DomainFilterRules: Sendable, Equatable {
         )
     }
 
+    /// Unions extra suffixes onto the existing blacklist. Defaults are never removed.
+    public func withAdditionalBlacklist(_ suffixes: [String]) -> DomainFilterRules {
+        DomainFilterRules(
+            blacklistedSuffixes: blacklistedSuffixes + suffixes,
+            whitelistedSuffixes: whitelistedSuffixes
+        )
+    }
+
     /// Unions extra suffixes onto the existing whitelist (kind-scoped passes).
     public func allowing(suffixes: [String]) -> DomainFilterRules {
         DomainFilterRules(

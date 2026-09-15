@@ -13,9 +13,17 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
     public init(fileURL: URL) throws {
         let directory = fileURL.deletingLastPathComponent()
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o700],
+            ofItemAtPath: directory.path
+        )
         self.fileURL = fileURL
         self.database = try SQLiteDatabase(path: fileURL.path)
         try Self.installSchema(on: database)
+        try? FileManager.default.setAttributes(
+            [.posixPermissions: 0o600],
+            ofItemAtPath: fileURL.path
+        )
     }
 
     public init(inMemory: Void = ()) throws {
@@ -35,6 +43,29 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
     /// Test seam used to prove UPDATE/DELETE are rejected by SQL triggers.
     public func executeUncheckedSQL(_ sql: String) throws {
         try database.execute(sql)
+    }
+
+    func withGovernanceWritePermit<T>(_ body: () throws -> T) throws -> T {
+        try performAtomically {
+            try database.execute(
+                """
+                INSERT INTO governance_write_permit (id, allowed) VALUES (1, 1)
+                ON CONFLICT(id) DO UPDATE SET allowed = 1;
+                """
+            )
+            do {
+                let result = try body()
+                try database.execute(
+                    "UPDATE governance_write_permit SET allowed = 0 WHERE id = 1;"
+                )
+                return result
+            } catch {
+                try? database.execute(
+                    "UPDATE governance_write_permit SET allowed = 0 WHERE id = 1;"
+                )
+                throw error
+            }
+        }
     }
 
     public func performAtomically<T>(_ body: () throws -> T) throws -> T {
@@ -482,7 +513,8 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 habit_id TEXT NOT NULL REFERENCES micro_habits(id),
                 civil_date TEXT NOT NULL,
                 credits_awarded REAL NOT NULL,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                created_monotonic REAL NOT NULL DEFAULT 0
             );
             """
         )
@@ -494,6 +526,18 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         )
         try database.execute(
             """
+            CREATE TABLE IF NOT EXISTS governance_write_permit (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                allowed INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1))
+            );
+            """
+        )
+        try database.execute(
+            "INSERT OR IGNORE INTO governance_write_permit (id, allowed) VALUES (1, 0);"
+        )
+        try dropGovernanceTriggers(database)
+        try database.execute(
+            """
             CREATE TABLE IF NOT EXISTS governance_state (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 last_configuration_mutation_at TEXT,
@@ -502,13 +546,42 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 last_observed_wall TEXT,
                 last_observed_monotonic REAL,
                 last_observed_boot_session_uuid TEXT,
-                accrued_monotonic_elapsed REAL NOT NULL DEFAULT 0
+                accrued_monotonic_elapsed REAL NOT NULL DEFAULT 0,
+                pinned_time_zone TEXT,
+                seal_sequence INTEGER NOT NULL DEFAULT 0
             );
             """
         )
         try database.execute(
             "INSERT OR IGNORE INTO governance_state (id, accrued_monotonic_elapsed) VALUES (1, 0);"
         )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "governance_state",
+            column: "pinned_time_zone",
+            definition: "TEXT"
+        )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "governance_state",
+            column: "seal_sequence",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "micro_habit_completions",
+            column: "created_monotonic",
+            definition: "REAL NOT NULL DEFAULT 0"
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS governance_seal (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                envelope_json TEXT NOT NULL
+            );
+            """
+        )
+        try installGovernanceTriggers(database)
         try database.execute(
             """
             CREATE TABLE IF NOT EXISTS amenity_price_overrides (
@@ -524,6 +597,80 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 suffix TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL
             );
+            """
+        )
+    }
+
+    private static func dropGovernanceTriggers(_ database: SQLiteDatabase) throws {
+        try database.execute("DROP TRIGGER IF EXISTS governance_state_guard_update;")
+        try database.execute("DROP TRIGGER IF EXISTS governance_state_guard_delete;")
+        try database.execute("DROP TRIGGER IF EXISTS governance_state_guard_insert;")
+        try database.execute("DROP TRIGGER IF EXISTS governance_seal_guard_update;")
+        try database.execute("DROP TRIGGER IF EXISTS governance_seal_guard_delete;")
+        try database.execute("DROP TRIGGER IF EXISTS governance_seal_guard_insert;")
+    }
+
+    private static func installGovernanceTriggers(_ database: SQLiteDatabase) throws {
+        try dropGovernanceTriggers(database)
+        let permitClosed = "COALESCE((SELECT allowed FROM governance_write_permit WHERE id = 1), 0) = 0"
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS governance_state_guard_update
+            BEFORE UPDATE ON governance_state
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'governance_state is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS governance_state_guard_delete
+            BEFORE DELETE ON governance_state
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'governance_state is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS governance_state_guard_insert
+            BEFORE INSERT ON governance_state
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'governance_state is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS governance_seal_guard_update
+            BEFORE UPDATE ON governance_seal
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'governance_seal is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS governance_seal_guard_delete
+            BEFORE DELETE ON governance_seal
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'governance_seal is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS governance_seal_guard_insert
+            BEFORE INSERT ON governance_seal
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'governance_seal is sealed');
+            END;
             """
         )
     }

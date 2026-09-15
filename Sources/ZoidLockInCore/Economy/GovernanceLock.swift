@@ -5,7 +5,17 @@ public enum GovernanceLockPolicy: Sendable {
     public static let cooldownSeconds: TimeInterval = 172_800
     public static let bypassEnvironmentKey = "ZOID_BYPASS_GOVERNANCE_COOLDOWN"
 
+    /// Environment bypass is compiled in for DEBUG only. Release always returns false.
+    public static var isCompileTimeBypassAllowed: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
+    }
+
     public static func isEnvironmentBypassEnabled(_ environment: [String: String]) -> Bool {
+        #if DEBUG
         guard let raw = environment[bypassEnvironmentKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
               !raw.isEmpty
         else {
@@ -13,6 +23,10 @@ public enum GovernanceLockPolicy: Sendable {
         }
         let lowered = raw.lowercased()
         return raw == "1" || lowered == "true" || lowered == "yes"
+        #else
+        _ = environment
+        return false
+        #endif
     }
 
     public static func formattedCountdown(_ seconds: TimeInterval) -> String {
@@ -24,9 +38,21 @@ public enum GovernanceLockPolicy: Sendable {
     }
 }
 
+/// Test-target seam. Production `ZoidLockInApp` uses the public coordinator
+/// initializer, which cannot see this type (`internal`). `@testable import`
+/// is required from `Tests/ZoidLockInTests`.
+struct GovernanceLockTestConfiguration: Sendable {
+    var bypassCooldown: Bool
+
+    init(bypassCooldown: Bool) {
+        self.bypassCooldown = bypassCooldown
+    }
+}
+
 public enum GovernanceLockError: Error, Equatable, Sendable {
     case cooldownActive(remainingSeconds: TimeInterval)
     case clockTampered(skewSeconds: TimeInterval)
+    case integrityFailed
     case invalidAmenityPrice
     case invalidBlocklistSuffix
 }
@@ -38,6 +64,8 @@ extension GovernanceLockError: LocalizedError {
             return "Configuration is locked for \(GovernanceLockPolicy.formattedCountdown(remaining)) more."
         case .clockTampered(let skew):
             return "Clock tamper lock: wall clock diverged from the monotonic baseline by \(Int(skew.rounded(.up)))s."
+        case .integrityFailed:
+            return "Governance lock integrity check failed; configuration is locked for 48 hours."
         case .invalidAmenityPrice:
             return "Amenity price must be between 0 and 50 credits."
         case .invalidBlocklistSuffix:
@@ -55,6 +83,8 @@ public struct GovernanceState: Sendable, Equatable {
     public var lastObservedMonotonic: TimeInterval?
     public var lastObservedBootSessionUUID: String?
     public var accruedMonotonicElapsed: TimeInterval
+    public var pinnedTimeZoneIdentifier: String?
+    public var sequence: UInt64
 
     public static let empty = GovernanceState()
 
@@ -65,7 +95,9 @@ public struct GovernanceState: Sendable, Equatable {
         lastObservedWall: Date? = nil,
         lastObservedMonotonic: TimeInterval? = nil,
         lastObservedBootSessionUUID: String? = nil,
-        accruedMonotonicElapsed: TimeInterval = 0
+        accruedMonotonicElapsed: TimeInterval = 0,
+        pinnedTimeZoneIdentifier: String? = nil,
+        sequence: UInt64 = 0
     ) {
         self.lastConfigurationMutationAt = lastConfigurationMutationAt
         self.lastConfigurationMutationMonotonic = lastConfigurationMutationMonotonic
@@ -74,6 +106,8 @@ public struct GovernanceState: Sendable, Equatable {
         self.lastObservedMonotonic = lastObservedMonotonic
         self.lastObservedBootSessionUUID = lastObservedBootSessionUUID
         self.accruedMonotonicElapsed = max(0, accruedMonotonicElapsed)
+        self.pinnedTimeZoneIdentifier = pinnedTimeZoneIdentifier
+        self.sequence = sequence
     }
 
     public var hasMutation: Bool {
@@ -89,13 +123,15 @@ public struct GovernanceLockSnapshot: Sendable, Equatable {
     public var isBypassEnabled: Bool
     public var lastConfigurationMutationAt: Date?
     public var isClockTampered: Bool
+    public var integrityFailed: Bool
 
     public init(
         isLocked: Bool,
         remainingSeconds: TimeInterval,
         isBypassEnabled: Bool,
         lastConfigurationMutationAt: Date?,
-        isClockTampered: Bool
+        isClockTampered: Bool,
+        integrityFailed: Bool = false
     ) {
         self.isLocked = isLocked
         self.remainingSeconds = max(0, remainingSeconds)
@@ -103,12 +139,26 @@ public struct GovernanceLockSnapshot: Sendable, Equatable {
         self.isBypassEnabled = isBypassEnabled
         self.lastConfigurationMutationAt = lastConfigurationMutationAt
         self.isClockTampered = isClockTampered
-        if isBypassEnabled {
+        self.integrityFailed = integrityFailed
+        if integrityFailed {
+            self.bannerCaption = "CONFIG LOCKED · \(GovernanceLockPolicy.formattedCountdown(GovernanceLockPolicy.cooldownSeconds)) REMAINING"
+        } else if isBypassEnabled {
             self.bannerCaption = "CONFIG UNLOCKED · EDITABLE"
         } else if isLocked {
             self.bannerCaption = "CONFIG LOCKED · \(GovernanceLockPolicy.formattedCountdown(remainingSeconds)) REMAINING"
         } else {
             self.bannerCaption = "CONFIG UNLOCKED · EDITABLE"
         }
+    }
+
+    public static func failClosed(isClockTampered: Bool) -> GovernanceLockSnapshot {
+        GovernanceLockSnapshot(
+            isLocked: true,
+            remainingSeconds: GovernanceLockPolicy.cooldownSeconds,
+            isBypassEnabled: false,
+            lastConfigurationMutationAt: Date.distantPast,
+            isClockTampered: isClockTampered,
+            integrityFailed: true
+        )
     }
 }

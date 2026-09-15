@@ -10,17 +10,30 @@ public protocol MicroHabitStoring: Sendable {
     func completions(habitID: UUID, on day: String) throws -> [MicroHabitCompletion]
     func completions(on day: String) throws -> [MicroHabitCompletion]
     func allCompletions() throws -> [MicroHabitCompletion]
+    func earnedHabitCredits(fromMonotonic start: TimeInterval, through end: TimeInterval) throws -> Double
 }
 
 /// Persistence seam for the 48-hour governance lock and related config tables.
 public protocol GovernanceStoring: Sendable {
     func loadGovernanceState() throws -> GovernanceState
     func saveGovernanceState(_ state: GovernanceState) throws
+    func loadGovernanceEnvelope() throws -> GovernanceSealEnvelope?
+    func saveGovernanceEnvelope(_ envelope: GovernanceSealEnvelope) throws
     func loadAmenityPriceOverrides() throws -> [AmenityKind: Double]
     func upsertAmenityPriceOverride(kind: AmenityKind, cost: Double, updatedAt: Date) throws
     func loadBlocklistRules() throws -> [BlocklistRule]
     func upsertBlocklistRule(_ rule: BlocklistRule) throws
     func deleteBlocklistRule(suffix: String) throws
+}
+
+public extension MicroHabitStoring {
+    func earnedHabitCredits(fromMonotonic start: TimeInterval, through end: TimeInterval) throws -> Double {
+        CreditMath.normalize(
+            try allCompletions()
+                .filter { $0.createdMonotonic > start && $0.createdMonotonic <= end }
+                .reduce(0) { $0 + $1.creditsAwarded }
+        )
+    }
 }
 
 /// Deterministic in-memory adapter used by coordinator tests.
@@ -29,6 +42,7 @@ public final class InMemoryMicroHabitStore: MicroHabitStoring, GovernanceStoring
     private var habits: [UUID: MicroHabit] = [:]
     private var completions: [UUID: MicroHabitCompletion] = [:]
     private var governance = GovernanceState.empty
+    private var envelope: GovernanceSealEnvelope?
     private var prices: [AmenityKind: Double] = [:]
     private var blocklist: [String: BlocklistRule] = [:]
 
@@ -86,6 +100,14 @@ public final class InMemoryMicroHabitStore: MicroHabitStoring, GovernanceStoring
 
     public func saveGovernanceState(_ state: GovernanceState) throws {
         withLock { governance = state }
+    }
+
+    public func loadGovernanceEnvelope() throws -> GovernanceSealEnvelope? {
+        withLock { envelope }
+    }
+
+    public func saveGovernanceEnvelope(_ envelope: GovernanceSealEnvelope) throws {
+        withLock { self.envelope = envelope }
     }
 
     public func loadAmenityPriceOverrides() throws -> [AmenityKind: Double] {

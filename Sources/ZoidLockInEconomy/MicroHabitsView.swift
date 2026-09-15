@@ -175,6 +175,14 @@ public struct MicroHabitsPopoverView: View {
                 }
             }
 
+            if let caption = snapshot.editorReadOnlyCaption {
+                Text(caption)
+                    .font(SumiInk.caption(9))
+                    .tracking(1.2)
+                    .foregroundStyle(SumiInk.seal)
+                    .accessibilityIdentifier("habit-editor-readonly")
+            }
+
             HStack(spacing: 8) {
                 TextField("Make bed, stretch…", text: $draftTitle)
                     .textFieldStyle(.plain)
@@ -183,7 +191,8 @@ public struct MicroHabitsPopoverView: View {
                     .padding(.vertical, 7)
                     .background(SumiInk.paperSoft)
                     .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-                    .disabled(snapshot.editorIsLocked)
+                    .disabled(snapshot.editorFieldsDisabled)
+                    .allowsHitTesting(snapshot.editorAllowsHitTesting)
 
                 editorChip(
                     CreditMath.displayString(HabitCreditMinting.defaultReward),
@@ -195,6 +204,9 @@ public struct MicroHabitsPopoverView: View {
                     draftReward = 0.5
                 }
             }
+            .disabled(snapshot.editorFieldsDisabled)
+            .allowsHitTesting(snapshot.editorAllowsHitTesting)
+            .opacity(snapshot.editorFieldOpacity)
 
             HStack(spacing: 8) {
                 Text("FREQUENCY")
@@ -222,12 +234,16 @@ public struct MicroHabitsPopoverView: View {
                         .background(snapshot.editorIsLocked ? SumiInk.inkMuted : SumiInk.seal)
                 }
                 .buttonStyle(.plain)
-                .disabled(snapshot.editorIsLocked || draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .disabled(snapshot.editorFieldsDisabled || draftTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-            .disabled(snapshot.editorIsLocked)
-            .opacity(snapshot.editorIsLocked ? 0.72 : 1)
+            .disabled(snapshot.editorFieldsDisabled)
+            .allowsHitTesting(snapshot.editorAllowsHitTesting)
+            .opacity(snapshot.editorFieldOpacity)
         }
         .padding(.top, 10)
+        .disabled(snapshot.editorFieldsDisabled)
+        .allowsHitTesting(snapshot.editorAllowsHitTesting)
+        .opacity(snapshot.editorIsLocked ? snapshot.editorFieldOpacity : 1)
         .accessibilityIdentifier("habit-editor")
     }
 
@@ -270,7 +286,8 @@ public struct MicroHabitsPopoverView: View {
                 .overlay(Rectangle().stroke(SumiInk.ink.opacity(selected ? 1 : 0.35), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .disabled(snapshot.editorIsLocked)
+        .disabled(snapshot.editorFieldsDisabled)
+        .allowsHitTesting(snapshot.editorAllowsHitTesting)
     }
 
     private func metric(label: String, value: String) -> some View {

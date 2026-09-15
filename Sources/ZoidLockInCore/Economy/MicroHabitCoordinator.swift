@@ -25,7 +25,10 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
         self.engine = engine
         self.governance = governance
         self.wallClock = wallClock ?? SystemWallClock()
-        self.civilClock = LocalCivilClock(timeZone: timeZone)
+        let pinned = governance.ensurePinnedTimeZone()
+        _ = timeZone
+        self.civilClock = LocalCivilClock(timeZone: pinned)
+        governance.bind(engine: engine)
     }
 
     public var lastErrorMessage: String? {
@@ -128,13 +131,23 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
                 }
 
                 let now = wallClock.now()
+                let nowMono = governance.clock.nowSeconds()
                 let day = civilClock.dayKey(now)
                 let already = try store.completions(habitID: habit.id, on: day)
                 if already.count >= habit.dailyFrequencyLimit {
                     throw MicroHabitError.dailyFrequencyReached
                 }
 
-                let earnedToday = try engine.earnedHabitCredits(onLocalDay: day)
+                let earnedCivil = try engine.earnedHabitCredits(onLocalDay: day)
+                let windowStart = nowMono - HabitCreditMinting.rollingWindowSeconds
+                let earnedRolling = try store.earnedHabitCredits(
+                    fromMonotonic: windowStart,
+                    through: nowMono
+                )
+                let earnedToday = HabitCreditMinting.cappedEarned(
+                    civilDay: earnedCivil,
+                    rollingWindow: earnedRolling
+                )
                 let remaining = HabitCreditMinting.remainingDailyBudget(earnedToday: earnedToday)
                 if remaining <= 0 {
                     throw MicroHabitError.dailyCreditCeilingReached
@@ -153,7 +166,8 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
                     habitID: habit.id,
                     civilDate: day,
                     creditsAwarded: amount,
-                    createdAt: now
+                    createdAt: now,
+                    createdMonotonic: nowMono
                 )
 
                 let outcome = try engine.mintEarnedHabitAndThen(
@@ -197,9 +211,15 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
     public func snapshot(ticker: MenuBarTickerSnapshot? = nil) -> MicroHabitsSnapshot {
         let lockSnap = governance.snapshot()
         let now = wallClock.now()
+        let nowMono = governance.clock.nowSeconds()
         let day = civilClock.dayKey(now)
         let habits = (try? store.allHabits()) ?? []
-        let earned = (try? engine.earnedHabitCredits(onLocalDay: day)) ?? 0
+        let earnedCivil = (try? engine.earnedHabitCredits(onLocalDay: day)) ?? 0
+        let earnedRolling = (try? store.earnedHabitCredits(
+            fromMonotonic: nowMono - HabitCreditMinting.rollingWindowSeconds,
+            through: nowMono
+        )) ?? 0
+        let earned = HabitCreditMinting.cappedEarned(civilDay: earnedCivil, rollingWindow: earnedRolling)
         let remainingBudget = HabitCreditMinting.remainingDailyBudget(earnedToday: earned)
         let captured = withLock { (lastError, lastFeedback, lastCompletedID) }
         let tickerSnap = ticker ?? ((try? engine.snapshot()) ?? .proof)
@@ -242,7 +262,7 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
             spendableBalance: tickerSnap.spendableBalance,
             weekdayCaption: tickerSnap.weekdayCaption,
             localDayKey: tickerSnap.localDayKey,
-            editorIsLocked: lockSnap.isLocked && !lockSnap.isBypassEnabled
+            editorIsLocked: (lockSnap.isLocked && !lockSnap.isBypassEnabled) || lockSnap.integrityFailed
         )
     }
 

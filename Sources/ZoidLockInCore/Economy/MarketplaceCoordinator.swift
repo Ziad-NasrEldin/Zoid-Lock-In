@@ -19,7 +19,7 @@ extension MarketplaceCoordinatorError: LocalizedError {
 /// user space and talks to the helper only through `AmenityPassRedeeming`.
 public final class MarketplaceCoordinator: @unchecked Sendable {
     public let engine: ExchangeEngine
-    public let catalog: AmenityCatalog
+    public var catalog: AmenityCatalog { engine.catalog }
     public let issuer: AmenityVoucherIssuer
     public let queueLabel: String
 
@@ -39,7 +39,6 @@ public final class MarketplaceCoordinator: @unchecked Sendable {
         shield: (any MobileShieldPublishing)? = nil
     ) {
         self.engine = engine
-        self.catalog = engine.catalog
         self.issuer = issuer
         self.redeemer = redeemer
         self.clock = clock ?? MachContinuousTimeClock()

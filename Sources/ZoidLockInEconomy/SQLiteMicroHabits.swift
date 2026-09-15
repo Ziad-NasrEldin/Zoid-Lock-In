@@ -51,8 +51,8 @@ extension SQLiteEconomicLedger: MicroHabitStoring {
                 try database.execute(
                     """
                     INSERT INTO micro_habit_completions (
-                        id, habit_id, civil_date, credits_awarded, created_at
-                    ) VALUES (?, ?, ?, ?, ?);
+                        id, habit_id, civil_date, credits_awarded, created_at, created_monotonic
+                    ) VALUES (?, ?, ?, ?, ?, ?);
                     """,
                     [
                         .text(completion.id.uuidString),
@@ -60,6 +60,7 @@ extension SQLiteEconomicLedger: MicroHabitStoring {
                         .text(completion.civilDate),
                         .double(completion.creditsAwarded),
                         .text(LedgerISO8601.string(from: completion.createdAt)),
+                        .double(completion.createdMonotonic),
                     ]
                 )
             } catch EconomicLedgerError.sqlite(_, let message)
@@ -106,7 +107,7 @@ extension SQLiteEconomicLedger: MicroHabitStoring {
         """
 
     private static let completionSelectSQL = """
-        SELECT id, habit_id, civil_date, credits_awarded, created_at
+        SELECT id, habit_id, civil_date, credits_awarded, created_at, created_monotonic
         FROM micro_habit_completions
         """
 
@@ -148,7 +149,8 @@ extension SQLiteEconomicLedger: MicroHabitStoring {
             habitID: habitID,
             civilDate: civilDate,
             creditsAwarded: double(row["credits_awarded"]),
-            createdAt: createdAt
+            createdAt: createdAt,
+            createdMonotonic: double(row["created_monotonic"])
         )
     }
 }
@@ -159,7 +161,8 @@ extension SQLiteEconomicLedger: GovernanceStoring {
             """
             SELECT last_configuration_mutation_at, last_configuration_mutation_monotonic,
                    boot_session_uuid, last_observed_wall, last_observed_monotonic,
-                   last_observed_boot_session_uuid, accrued_monotonic_elapsed
+                   last_observed_boot_session_uuid, accrued_monotonic_elapsed,
+                   pinned_time_zone, seal_sequence
             FROM governance_state WHERE id = 1;
             """
         )
@@ -171,19 +174,22 @@ extension SQLiteEconomicLedger: GovernanceStoring {
             lastObservedWall: Self.optionalDate(row["last_observed_wall"]),
             lastObservedMonotonic: Self.optionalDouble(row["last_observed_monotonic"]),
             lastObservedBootSessionUUID: Self.optionalText(row["last_observed_boot_session_uuid"]),
-            accruedMonotonicElapsed: Self.optionalDouble(row["accrued_monotonic_elapsed"]) ?? 0
+            accruedMonotonicElapsed: Self.optionalDouble(row["accrued_monotonic_elapsed"]) ?? 0,
+            pinnedTimeZoneIdentifier: Self.optionalText(row["pinned_time_zone"]),
+            sequence: UInt64(Self.int(row["seal_sequence"]))
         )
     }
 
     public func saveGovernanceState(_ state: GovernanceState) throws {
-        try performAtomically {
+        try withGovernanceWritePermit {
             try database.execute(
                 """
                 INSERT INTO governance_state (
                     id, last_configuration_mutation_at, last_configuration_mutation_monotonic,
                     boot_session_uuid, last_observed_wall, last_observed_monotonic,
-                    last_observed_boot_session_uuid, accrued_monotonic_elapsed
-                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+                    last_observed_boot_session_uuid, accrued_monotonic_elapsed,
+                    pinned_time_zone, seal_sequence
+                ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     last_configuration_mutation_at = excluded.last_configuration_mutation_at,
                     last_configuration_mutation_monotonic = excluded.last_configuration_mutation_monotonic,
@@ -191,7 +197,9 @@ extension SQLiteEconomicLedger: GovernanceStoring {
                     last_observed_wall = excluded.last_observed_wall,
                     last_observed_monotonic = excluded.last_observed_monotonic,
                     last_observed_boot_session_uuid = excluded.last_observed_boot_session_uuid,
-                    accrued_monotonic_elapsed = excluded.accrued_monotonic_elapsed;
+                    accrued_monotonic_elapsed = excluded.accrued_monotonic_elapsed,
+                    pinned_time_zone = excluded.pinned_time_zone,
+                    seal_sequence = excluded.seal_sequence;
                 """,
                 [
                     state.lastConfigurationMutationAt.map { .text(LedgerISO8601.string(from: $0)) } ?? .null,
@@ -201,7 +209,37 @@ extension SQLiteEconomicLedger: GovernanceStoring {
                     state.lastObservedMonotonic.map(SQLiteValue.double) ?? .null,
                     state.lastObservedBootSessionUUID.map(SQLiteValue.text) ?? .null,
                     .double(state.accruedMonotonicElapsed),
+                    state.pinnedTimeZoneIdentifier.map(SQLiteValue.text) ?? .null,
+                    .integer(Int64(state.sequence)),
                 ]
+            )
+        }
+    }
+
+    public func loadGovernanceEnvelope() throws -> GovernanceSealEnvelope? {
+        let rows = try database.query(
+            "SELECT envelope_json FROM governance_seal WHERE id = 1;"
+        )
+        guard case let .text(json)? = rows.first?["envelope_json"],
+              let data = json.data(using: .utf8)
+        else {
+            return nil
+        }
+        return try GovernanceSeal.decode(data)
+    }
+
+    public func saveGovernanceEnvelope(_ envelope: GovernanceSealEnvelope) throws {
+        let data = try GovernanceSeal.encode(envelope)
+        guard let json = String(data: data, encoding: .utf8) else {
+            throw EconomicLedgerError.invalidSchema
+        }
+        try withGovernanceWritePermit {
+            try database.execute(
+                """
+                INSERT INTO governance_seal (id, envelope_json) VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET envelope_json = excluded.envelope_json;
+                """,
+                [.text(json)]
             )
         }
     }

@@ -178,6 +178,10 @@ final class SQLiteDatabase: @unchecked Sendable {
             || message.localizedCaseInsensitiveContains("audit is sealed") {
             return .appendOnly
         }
+        if message.localizedCaseInsensitiveContains("governance_state is sealed")
+            || message.localizedCaseInsensitiveContains("governance_seal is sealed") {
+            return .sealed
+        }
         return .sqlite(code: code, message: message)
     }
 

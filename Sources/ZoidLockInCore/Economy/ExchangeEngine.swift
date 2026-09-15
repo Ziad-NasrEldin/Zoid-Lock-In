@@ -43,14 +43,15 @@ extension ExchangeEngineError: LocalizedError {
 public final class ExchangeEngine: @unchecked Sendable {
     public let ledger: any EconomicLedger
     public let incidentStore: any EmergencyIncidentStoring
-    public let catalog: AmenityCatalog
     public let civilClock: LocalCivilClock
 
+    private var catalogStorage: AmenityCatalog
     private let clock: any MonotonicTimeProviding
     private let focusClock: any MonotonicTimeProviding
     private let wallClock: any WallClockProviding
     private let activityDetector: any ActivityDetecting
     public let timeTravel: TimeTravelGuard
+    private let habitWindow: (any MicroHabitStoring)?
     private let lock = NSRecursiveLock()
 
     private var liveSession: FocusSessionRecord?
@@ -66,7 +67,8 @@ public final class ExchangeEngine: @unchecked Sendable {
         activityDetector: any ActivityDetecting = CGEventIdleMonitor(),
         timeTravel: TimeTravelGuard = TimeTravelGuard(),
         timeZone: TimeZone = .current,
-        catalog: AmenityCatalog = .standard
+        catalog: AmenityCatalog = .standard,
+        habitWindow: (any MicroHabitStoring)? = nil
     ) {
         self.ledger = ledger
         self.incidentStore = incidentStore
@@ -76,8 +78,19 @@ public final class ExchangeEngine: @unchecked Sendable {
         self.activityDetector = activityDetector
         self.timeTravel = timeTravel
         self.civilClock = LocalCivilClock(timeZone: timeZone)
-        self.catalog = catalog
+        self.catalogStorage = catalog
+        self.habitWindow = habitWindow
         restoreLiveSession()
+    }
+
+    public var catalog: AmenityCatalog {
+        withLock { catalogStorage }
+    }
+
+    public func applyAmenityPriceOverrides(_ overrides: [AmenityKind: Double]) {
+        withLock {
+            catalogStorage.priceOverrides = overrides
+        }
     }
 
     public var walletBalance: Double {
@@ -312,8 +325,9 @@ public final class ExchangeEngine: @unchecked Sendable {
         let reference = HabitCreditMinting.walletReference(completionID: completionID)
         let requested = CreditMath.normalize(requestedRaw)
         let day = civilClock.dayKey(wallClock.now())
+        let nowMono = clock.nowSeconds()
         if let existing = try existingEarnedHabitLocked(reference: reference) {
-            let earnedToday = try earnedHabitCreditsOnLocalDayLocked(day)
+            let earnedToday = try cappedHabitCreditsLocked(onLocalDay: day, nowMonotonic: nowMono)
             return HabitCreditMintOutcome(
                 transaction: existing,
                 creditsMinted: existing.amount,
@@ -324,7 +338,7 @@ public final class ExchangeEngine: @unchecked Sendable {
             )
         }
 
-        let earnedToday = try earnedHabitCreditsOnLocalDayLocked(day)
+        let earnedToday = try cappedHabitCreditsLocked(onLocalDay: day, nowMonotonic: nowMono)
         let remaining = HabitCreditMinting.remainingDailyBudget(earnedToday: earnedToday)
         let amount = HabitCreditMinting.clippedCredits(requested: requested, earnedToday: earnedToday)
         let clipped = requested > 0 && amount + 0.000_1 < requested
@@ -372,7 +386,7 @@ public final class ExchangeEngine: @unchecked Sendable {
             )
         } catch EconomicLedgerError.duplicateTransaction {
             if let existing = try existingEarnedHabitLocked(reference: reference) {
-                let earned = try earnedHabitCreditsOnLocalDayLocked(day)
+                let earned = try cappedHabitCreditsLocked(onLocalDay: day, nowMonotonic: nowMono)
                 return HabitCreditMintOutcome(
                     transaction: existing,
                     creditsMinted: existing.amount,
@@ -398,6 +412,20 @@ public final class ExchangeEngine: @unchecked Sendable {
             txs.filter { $0.transactionType == .earnedHabit }
                 .reduce(0) { $0 + $1.amount }
         )
+    }
+
+    private func cappedHabitCreditsLocked(onLocalDay day: String, nowMonotonic: TimeInterval) throws -> Double {
+        let civil = try earnedHabitCreditsOnLocalDayLocked(day)
+        let rolling: Double
+        if let habitWindow {
+            rolling = try habitWindow.earnedHabitCredits(
+                fromMonotonic: nowMonotonic - HabitCreditMinting.rollingWindowSeconds,
+                through: nowMonotonic
+            )
+        } else {
+            rolling = 0
+        }
+        return HabitCreditMinting.cappedEarned(civilDay: civil, rollingWindow: rolling)
     }
 
     public func wallTime() -> Date {
@@ -501,12 +529,12 @@ public final class ExchangeEngine: @unchecked Sendable {
             try reconcileIfNeededLocked()
 
             let now = wallClock.now()
-            if civilClock.isCurfew(now) && catalog.isBlockedByCurfew(kind) {
+            if civilClock.isCurfew(now) && catalogStorage.isBlockedByCurfew(kind) {
                 throw ExchangeEngineError.curfew
             }
 
             let friday = civilClock.isFriday(now)
-            let cost = catalog.cost(of: kind, fridayRestMode: friday)
+            let cost = catalogStorage.cost(of: kind, fridayRestMode: friday)
             return try ledger.performAtomically {
                 let balance = try ledger.latestBalance()
                 let spendable = CreditMath.spendable(balance)
@@ -525,7 +553,7 @@ public final class ExchangeEngine: @unchecked Sendable {
                 )
                 try ledger.appendTransaction(transaction)
 
-                let duration = catalog.durationSeconds(of: kind)
+                let duration = catalogStorage.durationSeconds(of: kind)
                 let voucher: AmenityPassVoucher?
                 if let passKind = kind.passKind, let duration {
                     voucher = issuer.issue(
@@ -972,7 +1000,7 @@ public final class ExchangeEngine: @unchecked Sendable {
 
     private func purchaseDescription(_ kind: AmenityKind, cost: Double, fridayRestMode: Bool) -> String {
         let label = kind.rawValue.replacingOccurrences(of: "_", with: " ")
-        if fridayRestMode && catalog.isBasicComfort(kind) {
+        if fridayRestMode && catalogStorage.isBasicComfort(kind) {
             return "Friday rest: \(label) at 0 credits"
         }
         return "Spend \(CreditMath.normalize(cost)) on \(label)"

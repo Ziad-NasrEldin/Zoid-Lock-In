@@ -1,7 +1,8 @@
+import CryptoKit
 import Foundation
 
 /// 48-hour configuration rate-limit. Remaining time uses monotonic accrual so
-/// advancing System Settings cannot expire the lock.
+/// advancing System Settings cannot expire the lock. SQLite rows are HMAC-sealed.
 public final class GovernanceLockCoordinator: @unchecked Sendable {
     public let store: any GovernanceStoring
     public let clock: any MonotonicTimeProviding
@@ -9,40 +10,114 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     public let timeTravel: TimeTravelGuard
     public let bootSessionUUID: String
     public let isCooldownBypassEnabled: Bool
+    public let replicaSealStore: (any GovernanceSealPersisting)?
 
+    public var onAmenityPricesChanged: (([AmenityKind: Double]) -> Void)?
+    public var onBlocklistChanged: ((DomainFilterRules) -> Void)?
+
+    private let keyProvider: any GovernanceKeyProviding
+    private let defaultPinnedTimeZone: TimeZone
     private let lock = NSRecursiveLock()
+    private weak var boundEngine: ExchangeEngine?
+    private var cachedKey: SymmetricKey?
 
-    public init(
+    public convenience init(
         store: any GovernanceStoring,
         clock: any MonotonicTimeProviding = MachContinuousTimeClock(),
         wallClock: any WallClockProviding = SystemWallClock(),
         timeTravel: TimeTravelGuard = TimeTravelGuard(),
         bootSessionUUID: String = BootSession.currentUUID(),
-        isCooldownBypassEnabled: Bool = false,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        keyProvider: any GovernanceKeyProviding = InMemoryGovernanceKeyProvider(),
+        replicaSealStore: (any GovernanceSealPersisting)? = nil,
+        pinnedTimeZone: TimeZone = .current
+    ) {
+        self.init(
+            store: store,
+            clock: clock,
+            wallClock: wallClock,
+            timeTravel: timeTravel,
+            bootSessionUUID: bootSessionUUID,
+            environment: environment,
+            keyProvider: keyProvider,
+            replicaSealStore: replicaSealStore,
+            pinnedTimeZone: pinnedTimeZone,
+            testConfiguration: nil
+        )
+    }
+
+    init(
+        store: any GovernanceStoring,
+        clock: any MonotonicTimeProviding = MachContinuousTimeClock(),
+        wallClock: any WallClockProviding = SystemWallClock(),
+        timeTravel: TimeTravelGuard = TimeTravelGuard(),
+        bootSessionUUID: String = BootSession.currentUUID(),
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        keyProvider: any GovernanceKeyProviding = InMemoryGovernanceKeyProvider(),
+        replicaSealStore: (any GovernanceSealPersisting)? = nil,
+        pinnedTimeZone: TimeZone = .current,
+        testConfiguration: GovernanceLockTestConfiguration?
     ) {
         self.store = store
         self.clock = clock
         self.wallClock = wallClock
         self.timeTravel = timeTravel
         self.bootSessionUUID = bootSessionUUID
-        self.isCooldownBypassEnabled = isCooldownBypassEnabled
+        self.keyProvider = keyProvider
+        self.replicaSealStore = replicaSealStore
+        self.defaultPinnedTimeZone = pinnedTimeZone
+        let injectedBypass = testConfiguration?.bypassCooldown == true
+        #if DEBUG
+        self.isCooldownBypassEnabled = injectedBypass
             || GovernanceLockPolicy.isEnvironmentBypassEnabled(environment)
+        #else
+        self.isCooldownBypassEnabled = injectedBypass
+        _ = environment
+        #endif
         restoreTimeTravelOrigin()
+        _ = ensurePinnedTimeZone()
+    }
+
+    public var pinnedTimeZone: TimeZone {
+        withLock {
+            if let identifier = (try? verifiedStateLocked())?.pinnedTimeZoneIdentifier
+                ?? (try? store.loadGovernanceState())?.pinnedTimeZoneIdentifier,
+               let timeZone = TimeZone(identifier: identifier) {
+                return timeZone
+            }
+            return defaultPinnedTimeZone
+        }
+    }
+
+    /// Loads stored amenity overrides into the live engine and publishes composed
+    /// domain rules to any blocklist observer (filter / daemon).
+    public func bind(engine: ExchangeEngine) {
+        withLock {
+            boundEngine = engine
+            publishLiveSettingsLocked()
+        }
+    }
+
+    public func publishLiveSettings() {
+        withLock { publishLiveSettingsLocked() }
     }
 
     public func snapshot() -> GovernanceLockSnapshot {
         withLock {
-            let remaining = (try? accrueLocked()) ?? GovernanceLockPolicy.cooldownSeconds
-            let state = (try? store.loadGovernanceState()) ?? .empty
-            let locked = remaining > 0 && state.hasMutation && !isCooldownBypassEnabled
-            return GovernanceLockSnapshot(
-                isLocked: locked,
-                remainingSeconds: isCooldownBypassEnabled ? 0 : remaining,
-                isBypassEnabled: isCooldownBypassEnabled,
-                lastConfigurationMutationAt: state.lastConfigurationMutationAt,
-                isClockTampered: timeTravel.isTampered
-            )
+            do {
+                let remaining = try accrueLocked()
+                let state = try verifiedStateLocked()
+                let locked = (remaining > 0 && state.hasMutation && !isCooldownBypassEnabled)
+                return GovernanceLockSnapshot(
+                    isLocked: locked,
+                    remainingSeconds: isCooldownBypassEnabled ? 0 : remaining,
+                    isBypassEnabled: isCooldownBypassEnabled,
+                    lastConfigurationMutationAt: state.lastConfigurationMutationAt,
+                    isClockTampered: timeTravel.isTampered
+                )
+            } catch {
+                return .failClosed(isClockTampered: timeTravel.isTampered)
+            }
         }
     }
 
@@ -73,6 +148,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
             try ensureMutableLocked()
             let result = try body()
             try recordMutationLocked()
+            publishLiveSettingsLocked()
             return result
         }
     }
@@ -81,7 +157,9 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     public func recordMutation() throws -> GovernanceState {
         try withLock {
             try ensureMutableLocked()
-            return try recordMutationLocked()
+            let state = try recordMutationLocked()
+            publishLiveSettingsLocked()
+            return state
         }
     }
 
@@ -132,10 +210,31 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
 
     public func composedDomainRules(defaults: DomainFilterRules = DomainFilterRules()) throws -> DomainFilterRules {
         let extras = try blocklistRules().map(\.suffix)
-        return DomainFilterRules(
-            blacklistedSuffixes: defaults.blacklistedSuffixes + extras,
-            whitelistedSuffixes: defaults.whitelistedSuffixes
-        )
+        return defaults.withAdditionalBlacklist(extras)
+    }
+
+    public func composedEnforcementPolicy() throws -> EnforcementPolicy {
+        var policy = EnforcementPolicy.lockedDown
+        policy.domainRules = try composedDomainRules()
+        return policy
+    }
+
+    @discardableResult
+    public func ensurePinnedTimeZone() -> TimeZone {
+        withLock {
+            do {
+                var state = try verifiedStateLocked()
+                if let identifier = state.pinnedTimeZoneIdentifier,
+                   let timeZone = TimeZone(identifier: identifier) {
+                    return timeZone
+                }
+                state.pinnedTimeZoneIdentifier = defaultPinnedTimeZone.identifier
+                try persistStateLocked(state)
+                return defaultPinnedTimeZone
+            } catch {
+                return defaultPinnedTimeZone
+            }
+        }
     }
 
     private func restoreTimeTravelOrigin() {
@@ -168,7 +267,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         let nowMono = clock.nowSeconds()
         timeTravel.observe(wall: nowWall, monotonic: nowMono)
 
-        var state = try store.loadGovernanceState()
+        var state = try verifiedStateLocked()
         if let lastMono = state.lastObservedMonotonic,
            state.lastObservedBootSessionUUID == bootSessionUUID {
             let delta = nowMono - lastMono
@@ -180,7 +279,10 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         state.lastObservedWall = nowWall
         state.lastObservedMonotonic = nowMono
         state.lastObservedBootSessionUUID = bootSessionUUID
-        try store.saveGovernanceState(state)
+        if state.pinnedTimeZoneIdentifier == nil {
+            state.pinnedTimeZoneIdentifier = defaultPinnedTimeZone.identifier
+        }
+        try persistStateLocked(state)
 
         guard state.hasMutation else {
             return 0
@@ -198,17 +300,60 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         let nowWall = wallClock.now()
         let nowMono = clock.nowSeconds()
         timeTravel.observe(wall: nowWall, monotonic: nowMono)
-        let state = GovernanceState(
-            lastConfigurationMutationAt: nowWall,
-            lastConfigurationMutationMonotonic: nowMono,
-            mutationBootSessionUUID: bootSessionUUID,
-            lastObservedWall: nowWall,
-            lastObservedMonotonic: nowMono,
-            lastObservedBootSessionUUID: bootSessionUUID,
-            accruedMonotonicElapsed: 0
-        )
-        try store.saveGovernanceState(state)
+        var state = (try? verifiedStateLocked()) ?? .empty
+        state.lastConfigurationMutationAt = nowWall
+        state.lastConfigurationMutationMonotonic = nowMono
+        state.mutationBootSessionUUID = bootSessionUUID
+        state.lastObservedWall = nowWall
+        state.lastObservedMonotonic = nowMono
+        state.lastObservedBootSessionUUID = bootSessionUUID
+        state.accruedMonotonicElapsed = 0
+        if state.pinnedTimeZoneIdentifier == nil {
+            state.pinnedTimeZoneIdentifier = defaultPinnedTimeZone.identifier
+        }
+        try persistStateLocked(state)
         return state
+    }
+
+    private func persistStateLocked(_ state: GovernanceState) throws {
+        var next = state
+        next.sequence = max(state.sequence, (try? store.loadGovernanceState().sequence) ?? 0) + 1
+        let key = try sealKeyLocked()
+        let envelope = try GovernanceSeal.seal(GovernanceSealPayload(next), key: key)
+        try store.saveGovernanceState(next)
+        try store.saveGovernanceEnvelope(envelope)
+        try replicaSealStore?.saveEnvelope(envelope)
+    }
+
+    private func verifiedStateLocked() throws -> GovernanceState {
+        let sqlite = try store.loadGovernanceState()
+        let envelope = try store.loadGovernanceEnvelope()
+        let replica = try replicaSealStore?.loadEnvelope()
+        let key = try sealKeyLocked()
+        return try GovernanceIntegrity.verify(
+            sqlite: sqlite,
+            envelope: envelope,
+            replica: replica,
+            key: key
+        )
+    }
+
+    private func sealKeyLocked() throws -> SymmetricKey {
+        if let cachedKey {
+            return cachedKey
+        }
+        let key = try keyProvider.loadOrCreate()
+        cachedKey = key
+        return key
+    }
+
+    private func publishLiveSettingsLocked() {
+        let overrides = (try? store.loadAmenityPriceOverrides()) ?? [:]
+        boundEngine?.applyAmenityPriceOverrides(overrides)
+        onAmenityPricesChanged?(overrides)
+        if let rules = try? composedDomainRules() {
+            onBlocklistChanged?(rules)
+        }
     }
 
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {

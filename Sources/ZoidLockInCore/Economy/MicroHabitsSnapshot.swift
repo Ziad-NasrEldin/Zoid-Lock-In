@@ -79,6 +79,18 @@ public struct MicroHabitsSnapshot: Sendable, Equatable {
         self.editorIsLocked = editorIsLocked
     }
 
+    public var editorFieldsDisabled: Bool { editorIsLocked }
+
+    public var editorAllowsHitTesting: Bool { !editorIsLocked }
+
+    public var editorFieldOpacity: Double { editorIsLocked ? 0.55 : 1 }
+
+    public static let editorReadOnlyCaptionText = "READ-ONLY · CONFIGURATION LOCKED"
+
+    public var editorReadOnlyCaption: String? {
+        editorIsLocked ? Self.editorReadOnlyCaptionText : nil
+    }
+
     public var formattedDailyCredits: String {
         "\(CreditMath.displayString(dailyHabitCredits)) / \(CreditMath.displayString(dailyCap))"
     }
