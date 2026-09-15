@@ -184,7 +184,7 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         if timeTravel.isTampered {
             next.isTampered = true
         }
-        var evaluated = Self.evaluate(
+        let evaluated = Self.evaluate(
             state: next,
             nowWall: nowWall,
             accruedMonotonic: next.accruedMonotonicElapsed,
@@ -195,13 +195,21 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         next.lastObservedWall = nowWall
         next.lastObservedMonotonic = nowMono
         next.isTampered = next.isTampered || timeTravel.isTampered
-        evaluated = CalibrationSnapshot(
-            phase: evaluated.phase,
-            state: next,
-            remainingSeconds: evaluated.remainingSeconds,
-            isClockTampered: evaluated.isClockTampered || next.isTampered
-        )
-        try? persistStateLocked(next)
+        let previousPhase = Self.evaluate(
+            state: state,
+            nowWall: state.lastObservedWall ?? nowWall,
+            accruedMonotonic: state.accruedMonotonicElapsed,
+            civilClock: civilClock,
+            isTampered: state.isTampered
+        ).phase
+        let phaseChanged = evaluated.phase != previousPhase
+        let tamperChanged = evaluated.state.isTampered != state.isTampered
+        let completedChanged = evaluated.state.isCompleted != state.isCompleted
+        let monotonicDelta = (evaluated.state.lastObservedMonotonic ?? nowMono) - (state.lastObservedMonotonic ?? nowMono)
+
+        if phaseChanged || tamperChanged || completedChanged || monotonicDelta >= 60 {
+            try? persistStateLocked(next)
+        }
         return evaluated
     }
 
@@ -276,6 +284,7 @@ public final class CalibrationCoordinator: @unchecked Sendable {
     }
 
     private func failClosedSnapshotLocked(nowWall: Date, nowMono: TimeInterval) -> CalibrationSnapshot {
+        let wasFailedClosed = failedClosed
         failedClosed = true
         timeTravel.markTampered()
         var hard = CalibrationState.failClosedHard(
@@ -285,7 +294,9 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         )
         hard.isCompleted = true
         hard.isTampered = true
-        try? persistStateLocked(hard)
+        if !wasFailedClosed {
+            try? persistStateLocked(hard)
+        }
         return CalibrationSnapshot(
             phase: .hardLockdown,
             state: hard,

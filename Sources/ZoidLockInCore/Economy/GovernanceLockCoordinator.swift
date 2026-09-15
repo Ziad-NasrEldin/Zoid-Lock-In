@@ -258,7 +258,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     }
 
     private func ensureMutableLocked() throws {
-        let remaining = try accrueLocked()
+        let remaining = try accrueLocked(persist: true)
         if timeTravel.isTampered {
             throw GovernanceLockError.clockTampered(skewSeconds: timeTravel.lastObservedSkewSeconds)
         }
@@ -276,36 +276,47 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     }
 
     @discardableResult
-    private func accrueLocked() throws -> TimeInterval {
+    private func accrueLocked(persist: Bool = false) throws -> TimeInterval {
         let nowWall = wallClock.now()
         let nowMono = clock.nowSeconds()
         timeTravel.observe(wall: nowWall, monotonic: nowMono)
 
         var state = try verifiedStateLocked()
+        var delta: TimeInterval = 0
         if let lastMono = state.lastObservedMonotonic,
            state.lastObservedBootSessionUUID == bootSessionUUID {
-            let delta = nowMono - lastMono
-            if delta > 0 {
-                state.accruedMonotonicElapsed += delta
+            let elapsed = nowMono - lastMono
+            if elapsed > 0 {
+                delta = elapsed
             }
         }
 
-        state.lastObservedWall = nowWall
-        state.lastObservedMonotonic = nowMono
-        state.lastObservedBootSessionUUID = bootSessionUUID
-        if state.pinnedTimeZoneIdentifier == nil {
-            state.pinnedTimeZoneIdentifier = defaultPinnedTimeZone.identifier
-        }
-        try persistStateLocked(state)
-
+        let totalAccrued = state.accruedMonotonicElapsed + delta
         guard state.hasMutation else {
+            if state.pinnedTimeZoneIdentifier == nil {
+                state.pinnedTimeZoneIdentifier = defaultPinnedTimeZone.identifier
+                try persistStateLocked(state)
+            }
             return 0
         }
 
-        var remaining = max(0, GovernanceLockPolicy.cooldownSeconds - state.accruedMonotonicElapsed)
+        var remaining = max(0, GovernanceLockPolicy.cooldownSeconds - totalAccrued)
         if timeTravel.isTampered {
             remaining = max(1, remaining)
         }
+
+        let shouldPersist = persist || (remaining == 0 && state.accruedMonotonicElapsed < GovernanceLockPolicy.cooldownSeconds) || delta >= 60
+        if shouldPersist {
+            state.accruedMonotonicElapsed = totalAccrued
+            state.lastObservedWall = nowWall
+            state.lastObservedMonotonic = nowMono
+            state.lastObservedBootSessionUUID = bootSessionUUID
+            if state.pinnedTimeZoneIdentifier == nil {
+                state.pinnedTimeZoneIdentifier = defaultPinnedTimeZone.identifier
+            }
+            try persistStateLocked(state)
+        }
+
         return remaining
     }
 

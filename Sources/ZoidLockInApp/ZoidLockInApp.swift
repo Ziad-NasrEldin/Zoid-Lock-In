@@ -131,22 +131,34 @@ enum ZoidLockInAppEntry {
     }
 }
 
+final class ZoidAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+}
+
 struct ZoidLockInMenuBarApp: App {
+    @NSApplicationDelegateAdaptor(ZoidAppDelegate.self) private var appDelegate
     @StateObject private var session = MenuBarSession()
 
     var body: some Scene {
+        Window("Zoid Lock In — Command Dashboard", id: "command-dashboard") {
+            CommandDashboardContainer(session: session)
+        }
+        .defaultSize(width: 1200, height: 800)
+        .windowResizability(.contentSize)
+
         MenuBarExtra {
             MenuBarCompanionRoot(session: session)
         } label: {
             MenuBarTickerLabel(snapshot: session.snapshot)
         }
         .menuBarExtraStyle(.window)
-
-        Window("Command Dashboard", id: "command-dashboard") {
-            CommandDashboardContainer(session: session)
-        }
-        .defaultSize(width: 1200, height: 800)
-        .windowResizability(.contentSize)
     }
 }
 
@@ -226,10 +238,19 @@ final class MenuBarSession: ObservableObject {
     private let ledger: SQLiteEconomicLedger
     private let incidentCache: CachedEmergencyIncidentStore
     private let client: XPCEnforcementClient
-    private let economyQueue: DispatchQueue
+    private let economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
     nonisolated(unsafe) private var timer: DispatchSourceTimer?
     private var purchaseInFlight = false
     private var lastPublishedMode: EnforcementMode?
+    private var lastFocusState: FocusSessionState?
+    private var lastActivePassCount: Int = -1
+    private var lastShieldPublishTime: Date = .distantPast
+    private var lastLedgerReloadTime: Date = .distantPast
+    private var lastPurgeTime: Date = .distantPast
+    private var lastKnownBalance: Double = -1
+    private var cachedVault: LifetimeVaultRecord = .empty
+    private var cachedReconciliations: [DailyReconciliationRecord] = []
+    private var cachedTransactions: [WalletTransaction] = []
 
     init() {
         let ledger = (try? SQLiteEconomicLedger.default()) ?? (try? SQLiteEconomicLedger())
@@ -344,18 +365,27 @@ final class MenuBarSession: ObservableObject {
         self.ledger = resolved
         self.incidentCache = cache
         self.client = client
-        self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
         let initial = (try? engine.snapshot()) ?? .proof
         self.snapshot = initial
         self.marketplace = MarketplaceSnapshot.assemble(ticker: initial)
         self.meeting = meetings.snapshot()
         self.habits = habitCoordinator.snapshot(ticker: initial)
+        let initialVault = (try? resolved.loadVault()) ?? .empty
+        let initialReconciliations = (try? resolved.allReconciliations()) ?? []
+        let initialTransactions = (try? resolved.allTransactions()) ?? []
+        self.cachedVault = initialVault
+        self.cachedReconciliations = initialReconciliations
+        self.cachedTransactions = initialTransactions
+        self.lastKnownBalance = initial.spendableBalance
+        self.lastFocusState = initial.focusState
+        self.lastActivePassCount = 0
+
         self.dashboard = CommandDashboardSnapshot.assemble(
             ticker: initial,
             calibration: calibration.snapshot(),
-            vault: (try? resolved.loadVault()) ?? .empty,
-            reconciliations: (try? resolved.allReconciliations()) ?? [],
-            transactions: (try? resolved.allTransactions()) ?? [],
+            vault: initialVault,
+            reconciliations: initialReconciliations,
+            transactions: initialTransactions,
             security: gatekeeper.snapshot(),
             governance: habitGovernance.snapshot()
         )
@@ -388,27 +418,58 @@ final class MenuBarSession: ObservableObject {
                     markLevied: { try await client.markEmergencyIncidentLevied(uuid: $0) }
                 )
                 let status = try? await client.queryStatus()
-                let publication = await shield.publish(
-                    ticker: next,
-                    status: status,
-                    now: Date(),
-                    event: .focusTick
-                )
+                let now = Date()
+
+                let activePassesCount = status?.activePasses.count ?? 0
+                let shouldPublishShield = next.focusState != self.lastFocusState
+                    || activePassesCount != self.lastActivePassCount
+                    || now.timeIntervalSince(self.lastShieldPublishTime) >= 60
+
+                let shieldStatus: MobileShieldStatus
+                if shouldPublishShield {
+                    let publication = await shield.publish(
+                        ticker: next,
+                        status: status,
+                        now: now,
+                        event: .focusTick
+                    )
+                    self.lastFocusState = next.focusState
+                    self.lastActivePassCount = activePassesCount
+                    self.lastShieldPublishTime = now
+                    shieldStatus = publication.status
+                } else {
+                    shieldStatus = shield.currentStatus
+                }
+
                 let market = marketplaceCoordinator.assemble(
                     ticker: next,
                     status: status,
-                    mobileShield: publication.status
+                    mobileShield: shieldStatus
                 )
-                _ = try? purge.purgeExpired()
+
+                if now.timeIntervalSince(self.lastPurgeTime) >= 60 {
+                    _ = try? purge.purgeExpired()
+                    self.lastPurgeTime = now
+                }
+
                 let meetingSnap = meetings.snapshot()
                 let habitSnap = habitCoordinator.snapshot(ticker: next)
                 let calibrationSnap = calibration.snapshot()
+
+                if next.spendableBalance != self.lastKnownBalance || now.timeIntervalSince(self.lastLedgerReloadTime) >= 30 {
+                    self.cachedVault = (try? ledger.loadVault()) ?? .empty
+                    self.cachedReconciliations = (try? ledger.allReconciliations()) ?? []
+                    self.cachedTransactions = (try? ledger.allTransactions()) ?? []
+                    self.lastKnownBalance = next.spendableBalance
+                    self.lastLedgerReloadTime = now
+                }
+
                 let dash = CommandDashboardSnapshot.assemble(
                     ticker: next,
                     calibration: calibrationSnap,
-                    vault: (try? ledger.loadVault()) ?? .empty,
-                    reconciliations: (try? ledger.allReconciliations()) ?? [],
-                    transactions: (try? ledger.allTransactions()) ?? [],
+                    vault: self.cachedVault,
+                    reconciliations: self.cachedReconciliations,
+                    transactions: self.cachedTransactions,
                     security: gatekeeper.snapshot(),
                     governance: habitGovernance.snapshot(),
                     emergencyDebtCredits: cache.unleviedIncidents().reduce(0) { $0 + $1.signedDebtCredits },

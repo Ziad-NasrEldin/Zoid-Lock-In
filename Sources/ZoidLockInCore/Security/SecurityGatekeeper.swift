@@ -163,6 +163,8 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     private var lastAlertKind: AdminAlertKind?
     private var replay = TOTPReplayWindow()
     private var auditEvents: [AdminAuditRecord] = []
+    private var enrolledCached: Bool?
+    private var cachedAlertRecipient: String?
 
     public init(
         keychain: any KeychainDataStoring,
@@ -186,7 +188,14 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     }
 
     public var isEnrolled: Bool {
-        storedPasswordHash() != nil && storedTOTPSecret() != nil
+        withMutex {
+            if let cached = enrolledCached {
+                return cached
+            }
+            let enrolled = storedPasswordHash() != nil && storedTOTPSecret() != nil
+            enrolledCached = enrolled
+            return enrolled
+        }
     }
 
     public var lastUsedTOTPWindow: UInt64? {
@@ -194,21 +203,50 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     }
 
     public var alertRecipient: String {
-        if let data = keychain.data(service: service, account: ZoidLockInKeychain.alertRecipientAccount),
-           let email = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
-           !email.isEmpty {
-            return email
+        withMutex {
+            if let cached = cachedAlertRecipient {
+                return cached
+            }
+            if let data = keychain.data(service: service, account: ZoidLockInKeychain.alertRecipientAccount),
+               let email = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !email.isEmpty {
+                cachedAlertRecipient = email
+                return email
+            }
+            cachedAlertRecipient = Self.defaultRecipient
+            return Self.defaultRecipient
         }
-        return Self.defaultRecipient
     }
 
     public func snapshot() -> SecuritySettingsSnapshot {
         withMutex {
+            let enrolled: Bool
+            if let cached = enrolledCached {
+                enrolled = cached
+            } else {
+                let check = storedPasswordHash() != nil && storedTOTPSecret() != nil
+                enrolledCached = check
+                enrolled = check
+            }
+            let recipient: String
+            if let cached = cachedAlertRecipient {
+                recipient = cached
+            } else {
+                if let data = keychain.data(service: service, account: ZoidLockInKeychain.alertRecipientAccount),
+                   let email = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !email.isEmpty {
+                    cachedAlertRecipient = email
+                    recipient = email
+                } else {
+                    cachedAlertRecipient = Self.defaultRecipient
+                    recipient = Self.defaultRecipient
+                }
+            }
             let failed = auditEvents.last.map { !$0.emailDispatched } ?? false
             return SecuritySettingsSnapshot(
-                isEnrolled: storedPasswordHash() != nil && storedTOTPSecret() != nil,
+                isEnrolled: enrolled,
                 isUnlocked: unlocked,
-                alertRecipient: alertRecipient,
+                alertRecipient: recipient,
                 unlockError: lastError,
                 lastAlertKind: lastAlertKind,
                 mailDispatchFailed: failed,
@@ -296,7 +334,11 @@ public final class SecurityGatekeeper: @unchecked Sendable {
                 }
             }
         }
-        withMutex { lastError = nil }
+        withMutex {
+            lastError = nil
+            enrolledCached = true
+            cachedAlertRecipient = recipient
+        }
         return SecurityEnrollment(
             totpSecretBase32: secret,
             otpAuthURL: TOTPEngine.otpAuthURL(secret: secret)
