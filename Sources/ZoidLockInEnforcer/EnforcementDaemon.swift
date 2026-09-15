@@ -435,8 +435,6 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
             var policy = basePolicy
             if passActive {
                 policy = basePolicy.overlay(for: kinds)
-            } else {
-                policy.mode = .hard
             }
             effectivePolicy = policy
 
@@ -453,7 +451,7 @@ public final class EnforcementDaemon: @unchecked Sendable, ZoidLockInEnforcement
                 isPassActive: passActive,
                 activePassKind: primary?.kind,
                 remainingPassSeconds: remaining,
-                isLockedDown: !passActive,
+                isLockedDown: !passActive && policy.mode == .hard,
                 activePasses: passStatuses
             )
             return (policy, snapshot, kinds)

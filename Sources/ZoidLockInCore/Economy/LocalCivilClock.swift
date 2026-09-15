@@ -38,6 +38,22 @@ public struct LocalCivilClock: Sendable {
             ?? date.addingTimeInterval(24 * 3600)
     }
 
+    /// Whole local midnights between `start` and `end`. Clock-back yields 0.
+    public func civilDaysElapsed(from start: Date, to end: Date) -> Int {
+        let days = calendar.dateComponents(
+            [.day],
+            from: startOfDay(start),
+            to: startOfDay(end)
+        ).day ?? 0
+        return max(0, days)
+    }
+
+    /// Start of the local civil day `days` after `date`'s local midnight.
+    public func startOfDay(addingDays days: Int, to date: Date) -> Date {
+        calendar.date(byAdding: .day, value: days, to: startOfDay(date))
+            ?? startOfDay(date).addingTimeInterval(TimeInterval(days) * 24 * 3600)
+    }
+
     public func date(fromDayKey dayKey: String, hour: Int = 12, minute: Int = 0, second: Int = 0) -> Date? {
         let parts = dayKey.split(separator: "-").compactMap { Int($0) }
         guard parts.count == 3 else { return nil }

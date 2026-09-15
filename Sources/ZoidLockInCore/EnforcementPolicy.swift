@@ -1,9 +1,16 @@
 import Foundation
 
-/// Soft calibration versus hard lockdown. Slice 9 uses `.soft`; Slice 1 defaults to `.hard`.
+/// Soft calibration versus hard lockdown.
+///
+/// - `hard`: drop blacklisted flows and SIGKILL matched processes.
+/// - `soft`: pause process kills (gaming / emergency overlay). Packet filter
+///   still drops unrelated hosts.
+/// - `calibration`: Slice 9 onboarding. Flows that would drop become
+///   `softInfraction` warnings; process kills are paused.
 public enum EnforcementMode: String, Sendable, Equatable, Codable {
     case hard
     case soft
+    case calibration
 }
 
 /// Combined enforcement policy applied by the privileged daemon and the filter sysex.
@@ -49,9 +56,7 @@ public struct EnforcementPolicy: Sendable, Equatable {
     /// any remaining kind relaxes them (gaming / emergency).
     public func overlay(for kinds: Set<PassKind>) -> EnforcementPolicy {
         if kinds.isEmpty {
-            var locked = self
-            locked.mode = .hard
-            return locked
+            return self
         }
         if kinds.contains(.emergency) {
             return EnforcementPolicy(
@@ -65,13 +70,28 @@ public struct EnforcementPolicy: Sendable, Equatable {
 
         let suffixes = kinds.flatMap(\.relaxedDomainSuffixes)
         let relaxProcess = kinds.contains { $0.relaxesProcessTermination }
+        let nextMode: EnforcementMode
+        if mode == .calibration {
+            nextMode = .calibration
+        } else if mode == .soft || relaxProcess {
+            nextMode = .soft
+        } else {
+            nextMode = .hard
+        }
         return EnforcementPolicy(
             domainRules: domainRules.allowing(suffixes: suffixes),
             processMatcher: processMatcher,
             processScanIntervalSeconds: processScanIntervalSeconds,
             inspectedPorts: inspectedPorts,
-            mode: relaxProcess ? .soft : .hard
+            mode: nextMode
         )
+    }
+
+    /// Slice 9: calibration forces `.soft` so flows warn instead of dropping.
+    public func applying(calibrationMode mode: EnforcementMode) -> EnforcementPolicy {
+        var copy = self
+        copy.mode = mode
+        return copy
     }
 
     /// True for HTTP, HTTPS, HTTP/3 (UDP/443), and common local proxy ports.

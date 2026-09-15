@@ -235,6 +235,19 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         }
     }
 
+    public func allReconciliations() throws -> [DailyReconciliationRecord] {
+        try withLock {
+            let rows = try database.query(
+                """
+                SELECT date, target_credits, earned_credits, spent_credits, swept_to_vault,
+                       victory_streak_count, deficit_strike_applied, friday_rest_mode
+                FROM daily_reconciliations ORDER BY date ASC;
+                """
+            )
+            return try rows.map(Self.reconciliation(from:))
+        }
+    }
+
     public func loadVault() throws -> LifetimeVaultRecord {
         try withLock {
             let rows = try database.query(
@@ -598,6 +611,36 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 created_at TEXT NOT NULL
             );
             """
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS calibration_state (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                calibration_started_at TEXT NOT NULL,
+                calibration_started_monotonic REAL NOT NULL,
+                boot_session_uuid TEXT NOT NULL,
+                is_completed INTEGER NOT NULL DEFAULT 0,
+                transition_to_hard_at TEXT NOT NULL
+            );
+            """
+        )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "calibration_state",
+            column: "last_observed_wall",
+            definition: "TEXT"
+        )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "calibration_state",
+            column: "last_observed_monotonic",
+            definition: "REAL"
+        )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "calibration_state",
+            column: "accrued_monotonic_elapsed",
+            definition: "REAL NOT NULL DEFAULT 0"
         )
     }
 

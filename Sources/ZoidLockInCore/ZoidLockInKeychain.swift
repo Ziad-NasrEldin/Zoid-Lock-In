@@ -42,6 +42,10 @@ public struct ZoidLockInKeychain: KeychainDataStoring {
     public static let governanceSealAccount = "com.mavoid.zoidlockin.governance.seal"
     public static let geminiService = "com.mavoid.zoidlockin.gemini"
     public static let geminiAccount = "api_key"
+    public static let securityService = "com.mavoid.zoidlockin.security"
+    public static let passwordHashAccount = "admin-password-hash"
+    public static let totpSecretAccount = "admin-totp-secret"
+    public static let alertRecipientAccount = "alert-mail-recipient"
 
     public init() {}
 

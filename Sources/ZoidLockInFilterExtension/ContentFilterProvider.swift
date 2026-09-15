@@ -125,7 +125,7 @@ public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Senda
     /// Maps core `FilterVerdict` values onto Network Extension verdicts.
     public static func mapVerdict(_ verdict: FilterVerdict) -> NEFilterNewFlowVerdict {
         switch verdict {
-        case .allow:
+        case .allow, .softInfraction:
             return .allow()
         case .drop:
             return .drop()

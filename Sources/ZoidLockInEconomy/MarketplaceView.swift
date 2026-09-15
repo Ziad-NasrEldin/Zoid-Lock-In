@@ -15,6 +15,7 @@ public struct MenuBarExtraView: View {
     public var onAppeal: ((String) -> Void)?
     public var onCompleteHabit: ((UUID) -> Void)?
     public var onCreateHabit: ((String, Double, Int) -> Void)?
+    public var onOpenDashboard: (() -> Void)?
 
     @State private var surface: MenuBarCompanionSurface
 
@@ -31,6 +32,7 @@ public struct MenuBarExtraView: View {
         onAppeal: ((String) -> Void)? = nil,
         onCompleteHabit: ((UUID) -> Void)? = nil,
         onCreateHabit: ((String, Double, Int) -> Void)? = nil,
+        onOpenDashboard: (() -> Void)? = nil,
         initialSurface: MenuBarCompanionSurface = .market
     ) {
         self.snapshot = snapshot
@@ -45,12 +47,14 @@ public struct MenuBarExtraView: View {
         self.onAppeal = onAppeal
         self.onCompleteHabit = onCompleteHabit
         self.onCreateHabit = onCreateHabit
+        self.onOpenDashboard = onOpenDashboard
         _surface = State(initialValue: initialSurface)
     }
 
     public var body: some View {
         VStack(spacing: 0) {
             surfaceSwitcher
+            dashboardLaunch
             Group {
                 if surface == .market {
                     MarketplacePopoverView(snapshot: snapshot, onPurchase: onPurchase)
@@ -73,6 +77,34 @@ public struct MenuBarExtraView: View {
                 }
             }
         }
+        .background(SumiInk.paper)
+    }
+
+    private var dashboardLaunch: some View {
+        Button {
+            onOpenDashboard?()
+        } label: {
+            HStack {
+                Text("OPEN COMMAND DASHBOARD")
+                    .font(SumiInk.caption(10))
+                    .tracking(1.6)
+                    .foregroundStyle(SumiInk.seal)
+                Spacer()
+                Text("台")
+                    .font(.system(size: 12, weight: .bold, design: .serif))
+                    .foregroundStyle(Color.white)
+                    .frame(width: 22, height: 22)
+                    .background(SumiInk.seal)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .overlay(Rectangle().stroke(SumiInk.seal.opacity(0.55), lineWidth: 1))
+            .background(SumiInk.sealWash)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 22)
+        .padding(.top, 8)
+        .frame(width: 440)
         .background(SumiInk.paper)
     }
 

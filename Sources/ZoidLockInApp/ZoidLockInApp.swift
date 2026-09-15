@@ -31,6 +31,11 @@ enum ZoidLockInAppEntry {
             renderMicroHabitsProofAndExit()
             return
         }
+        if CommandLine.arguments.contains("--render-desktop-dashboard-proof")
+            || CommandLine.arguments.contains("--render-calibration-mode-proof") {
+            renderDesktopDashboardProofAndExit()
+            return
+        }
         ZoidLockInMenuBarApp.main()
     }
 
@@ -111,6 +116,19 @@ enum ZoidLockInAppEntry {
             exit(1)
         }
     }
+
+    @MainActor
+    private static func renderDesktopDashboardProofAndExit() {
+        do {
+            try DesktopDashboardProofRenderer.renderProofSet()
+            FileHandle.standardError.write(
+                Data("Wrote \(DesktopDashboardProofRenderer.defaultProofURL.path)\n".utf8)
+            )
+        } catch {
+            FileHandle.standardError.write(Data("Desktop dashboard proof render failed: \(error)\n".utf8))
+            exit(1)
+        }
+    }
 }
 
 struct ZoidLockInMenuBarApp: App {
@@ -118,24 +136,58 @@ struct ZoidLockInMenuBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            MenuBarExtraView(
-                snapshot: session.marketplace,
-                onPurchase: session.purchase,
-                meeting: session.meeting,
-                habits: session.habits,
-                onPunchToggle: session.punchToggle,
-                onSubmitMeeting: session.submitMeeting,
-                onAbandonMeeting: session.abandonMeeting,
-                onImportArtifact: session.importArtifact,
-                onRetryAudit: session.retryMeetingAudit,
-                onAppeal: session.appealMeeting,
-                onCompleteHabit: session.completeHabit,
-                onCreateHabit: session.createHabit
-            )
+            MenuBarCompanionRoot(session: session)
         } label: {
             MenuBarTickerLabel(snapshot: session.snapshot)
         }
         .menuBarExtraStyle(.window)
+
+        Window("Command Dashboard", id: "command-dashboard") {
+            CommandDashboardContainer(session: session)
+        }
+        .defaultSize(width: 1200, height: 800)
+        .windowResizability(.contentSize)
+    }
+}
+
+private struct MenuBarCompanionRoot: View {
+    @ObservedObject var session: MenuBarSession
+    @Environment(\.openWindow) private var openWindow
+
+    var body: some View {
+        MenuBarExtraView(
+            snapshot: session.marketplace,
+            onPurchase: session.purchase,
+            meeting: session.meeting,
+            habits: session.habits,
+            onPunchToggle: session.punchToggle,
+            onSubmitMeeting: session.submitMeeting,
+            onAbandonMeeting: session.abandonMeeting,
+            onImportArtifact: session.importArtifact,
+            onRetryAudit: session.retryMeetingAudit,
+            onAppeal: session.appealMeeting,
+            onCompleteHabit: session.completeHabit,
+            onCreateHabit: session.createHabit,
+            onOpenDashboard: {
+                openWindow(id: "command-dashboard")
+            }
+        )
+    }
+}
+
+private struct CommandDashboardContainer: View {
+    @ObservedObject var session: MenuBarSession
+
+    var body: some View {
+        CommandDashboardView(
+            snapshot: session.dashboard,
+            onUnlock: { password, totp in
+                Task { await session.unlockSettings(password: password, totp: totp) }
+            },
+            onLock: {
+                session.lockSettings()
+            }
+        )
     }
 }
 
@@ -145,6 +197,7 @@ final class MenuBarSession: ObservableObject {
     @Published var marketplace: MarketplaceSnapshot
     @Published var meeting: OfflineMeetingSnapshot
     @Published var habits: MicroHabitsSnapshot
+    @Published var dashboard: CommandDashboardSnapshot
 
     private let coordinator: EconomyTickCoordinator
     private let marketplaceCoordinator: MarketplaceCoordinator
@@ -153,10 +206,16 @@ final class MenuBarSession: ObservableObject {
     private let auditor: OfflineMeetingAuditCoordinator
     private let purge: MeetingArtifactPurgeScheduler
     private let habitCoordinator: MicroHabitCoordinator
+    private let habitGovernance: GovernanceLockCoordinator
+    private let calibration: CalibrationCoordinator
+    private let gatekeeper: SecurityGatekeeper
+    private let ledger: SQLiteEconomicLedger
+    private let incidentCache: CachedEmergencyIncidentStore
     private let client: XPCEnforcementClient
     private let economyQueue: DispatchQueue
     nonisolated(unsafe) private var timer: DispatchSourceTimer?
     private var purchaseInFlight = false
+    private var lastPublishedMode: EnforcementMode?
 
     init() {
         let ledger = (try? SQLiteEconomicLedger.default()) ?? (try? SQLiteEconomicLedger())
@@ -187,12 +246,27 @@ final class MenuBarSession: ObservableObject {
         let client = XPCEnforcementClient()
         client.resume()
         client.startHeartbeatLoop()
+        let calibration = CalibrationCoordinator(
+            store: resolved,
+            clock: MachContinuousTimeClock(),
+            wallClock: SystemWallClock(),
+            timeTravel: timeTravel,
+            timeZone: pinnedTimeZone
+        )
         habitGovernance.onBlocklistChanged = { rules in
-            let snapshot = EnforcementPolicySnapshot(EnforcementPolicy(domainRules: rules))
+            let snapshot = EnforcementPolicySnapshot(
+                EnforcementPolicy(domainRules: rules, mode: calibration.enforcementMode())
+            )
             Task {
                 try? await client.applyPolicy(snapshot)
             }
         }
+        let gatekeeper = SecurityGatekeeper(
+            keychain: ZoidLockInKeychain(),
+            mail: AlertMailService(
+                configuration: AlertMailConfiguration(recipient: SecurityGatekeeper.defaultRecipient)
+            )
+        )
         let shieldStore = EncryptedStateStore(
             fallbackDirectory: EncryptedStateStore.defaultApplicationSupportDirectory(),
             keyProvider: KeychainMobileShieldKeyProvider(),
@@ -247,6 +321,11 @@ final class MenuBarSession: ObservableObject {
         self.auditor = auditor
         self.purge = purge
         self.habitCoordinator = habitCoordinator
+        self.habitGovernance = habitGovernance
+        self.calibration = calibration
+        self.gatekeeper = gatekeeper
+        self.ledger = resolved
+        self.incidentCache = cache
         self.client = client
         self.economyQueue = DispatchQueue(label: "zoidlockin.economy", qos: .userInitiated)
         let initial = (try? engine.snapshot()) ?? .proof
@@ -254,11 +333,28 @@ final class MenuBarSession: ObservableObject {
         self.marketplace = MarketplaceSnapshot.assemble(ticker: initial)
         self.meeting = meetings.snapshot()
         self.habits = habitCoordinator.snapshot(ticker: initial)
+        self.dashboard = CommandDashboardSnapshot.assemble(
+            ticker: initial,
+            calibration: calibration.snapshot(),
+            vault: (try? resolved.loadVault()) ?? .empty,
+            reconciliations: (try? resolved.allReconciliations()) ?? [],
+            transactions: (try? resolved.allTransactions()) ?? [],
+            security: gatekeeper.snapshot(),
+            governance: habitGovernance.snapshot()
+        )
+        lastPublishedMode = calibration.enforcementMode()
+        Task {
+            try? await client.applyPolicy(
+                EnforcementPolicySnapshot(
+                    EnforcementPolicy(mode: calibration.enforcementMode())
+                )
+            )
+        }
 
         let coalescer = TickCoalescer()
         let timer = DispatchSource.makeTimerSource(queue: economyQueue)
         timer.schedule(deadline: .now(), repeating: 1, leeway: .milliseconds(100))
-        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield, meetings, purge, habitCoordinator] in
+        timer.setEventHandler { [coordinator, client, marketplaceCoordinator, shield, meetings, purge, habitCoordinator, calibration, habitGovernance, ledger = resolved, cache, gatekeeper] in
             guard coalescer.begin() else { return }
             Task {
                 defer { coalescer.end() }
@@ -281,16 +377,68 @@ final class MenuBarSession: ObservableObject {
                 _ = try? purge.purgeExpired()
                 let meetingSnap = meetings.snapshot()
                 let habitSnap = habitCoordinator.snapshot(ticker: next)
+                let calibrationSnap = calibration.snapshot()
+                let dash = CommandDashboardSnapshot.assemble(
+                    ticker: next,
+                    calibration: calibrationSnap,
+                    vault: (try? ledger.loadVault()) ?? .empty,
+                    reconciliations: (try? ledger.allReconciliations()) ?? [],
+                    transactions: (try? ledger.allTransactions()) ?? [],
+                    security: gatekeeper.snapshot(),
+                    governance: habitGovernance.snapshot(),
+                    emergencyDebtCredits: cache.unleviedIncidents().reduce(0) { $0 + $1.signedDebtCredits },
+                    emergencyValveActive: status?.activePasses.contains { $0.kind == .emergency } == true
+                )
                 await MainActor.run { [weak self] in
                     self?.snapshot = next
                     self?.marketplace = market
                     self?.meeting = meetingSnap
                     self?.habits = habitSnap
+                    self?.dashboard = dash
+                    self?.publishCalibrationModeIfNeeded(calibrationSnap.enforcementMode)
                 }
             }
         }
         self.timer = timer
         timer.resume()
+    }
+
+    func unlockSettings(password: String, totp: String) async {
+        do {
+            _ = try await gatekeeper.unlock(password: password, totp: totp)
+        } catch {
+            _ = error
+        }
+        refreshDashboard()
+    }
+
+    func lockSettings() {
+        gatekeeper.lockSettings()
+        refreshDashboard()
+    }
+
+    private func publishCalibrationModeIfNeeded(_ mode: EnforcementMode) {
+        guard lastPublishedMode != mode else { return }
+        lastPublishedMode = mode
+        Task {
+            try? await client.applyPolicy(
+                EnforcementPolicySnapshot(EnforcementPolicy(mode: mode))
+            )
+        }
+    }
+
+    private func refreshDashboard() {
+        dashboard = CommandDashboardSnapshot.assemble(
+            ticker: snapshot,
+            calibration: calibration.snapshot(),
+            vault: (try? ledger.loadVault()) ?? .empty,
+            reconciliations: (try? ledger.allReconciliations()) ?? [],
+            transactions: (try? ledger.allTransactions()) ?? [],
+            security: gatekeeper.snapshot(),
+            governance: habitGovernance.snapshot(),
+            emergencyDebtCredits: incidentCache.unleviedIncidents().reduce(0) { $0 + $1.signedDebtCredits },
+            emergencyValveActive: marketplace.mobileShield.passActive
+        )
     }
 
     func purchase(_ kind: AmenityKind) {
@@ -378,6 +526,7 @@ final class MenuBarSession: ObservableObject {
             )
             habits = habitCoordinator.snapshot(ticker: next)
         }
+        refreshDashboard()
     }
 
     func abandonMeeting() {
@@ -438,6 +587,7 @@ final class MenuBarSession: ObservableObject {
         } else {
             habits = habitCoordinator.snapshot(ticker: snapshot)
         }
+        refreshDashboard()
     }
 
     deinit {

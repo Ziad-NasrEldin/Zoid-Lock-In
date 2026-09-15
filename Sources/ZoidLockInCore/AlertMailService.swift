@@ -162,7 +162,7 @@ public struct ResendAPIKeyResolver: Sendable {
 }
 
 /// Formats and POSTs emergency incident mail through the Resend Emails API.
-public struct AlertMailService: EmergencyIncidentAlerting, Sendable {
+public struct AlertMailService: EmergencyIncidentAlerting, AdminAlertDispatching, Sendable {
     public var configuration: AlertMailConfiguration
     public var transport: any HTTPTransporting
     public var keyResolver: ResendAPIKeyResolver
@@ -229,6 +229,51 @@ public struct AlertMailService: EmergencyIncidentAlerting, Sendable {
         }
 
         let payload = Self.makePayload(report: report, from: configuration.from)
+        let request = try makeURLRequest(payload: payload, apiKey: apiKey)
+        let (_, response) = try await transport.perform(request)
+        guard (200..<300).contains(response.statusCode) else {
+            throw AlertMailError.httpStatus(response.statusCode)
+        }
+    }
+
+    public static func makeAdminPayload(
+        event: AdminAlertEvent,
+        from: String
+    ) -> ResendEmailPayload {
+        let timestamp = ISO8601DateFormatter().string(from: event.timestamp)
+        let subject: String
+        let headline: String
+        switch event.kind {
+        case .settingsUnlocked:
+            subject = "WARNING: Admin settings unlocked"
+            headline = "Administrative 2FA settings were unlocked."
+        case .configurationMutated:
+            subject = "WARNING: Administrative configuration mutated"
+            headline = "An authenticated admin mutated Zoid Lock In configuration."
+        }
+        let text = """
+        PSYCHOLOGICAL COMMITMENT ALERT: \(headline)
+
+        Event: \(event.kind.rawValue)
+        Timestamp: \(timestamp)
+        Recipient: \(event.recipient)
+        Detail: \(event.detail.isEmpty ? "—" : event.detail)
+
+        The 48-hour governance cooldown still applies to price, habit, and blocklist edits.
+        """
+        return ResendEmailPayload(
+            from: from,
+            to: [event.recipient],
+            subject: subject,
+            text: text
+        )
+    }
+
+    public func dispatchAdminAlert(_ event: AdminAlertEvent) async throws {
+        guard let apiKey = keyResolver.resolve() else {
+            throw AlertMailError.missingAPIKey
+        }
+        let payload = Self.makeAdminPayload(event: event, from: configuration.from)
         let request = try makeURLRequest(payload: payload, apiKey: apiKey)
         let (_, response) = try await transport.perform(request)
         guard (200..<300).contains(response.statusCode) else {

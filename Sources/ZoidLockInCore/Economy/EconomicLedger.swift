@@ -15,6 +15,7 @@ public protocol EconomicLedger: Sendable {
     func insertReconciliation(_ record: DailyReconciliationRecord) throws
     func reconciliation(onDay day: String) throws -> DailyReconciliationRecord?
     func latestReconciliationDay() throws -> String?
+    func allReconciliations() throws -> [DailyReconciliationRecord]
 
     func loadVault() throws -> LifetimeVaultRecord
     func saveVault(_ vault: LifetimeVaultRecord) throws
@@ -31,6 +32,10 @@ public extension EconomicLedger {
                 .filter { $0.transactionType == .penalty }
                 .compactMap(\.referenceID)
         )
+    }
+
+    func deficitStrikeRecords() throws -> [DailyReconciliationRecord] {
+        try allReconciliations().filter(\.deficitStrikeApplied)
     }
 }
 
@@ -102,6 +107,10 @@ public final class InMemoryEconomicLedger: EconomicLedger, @unchecked Sendable {
 
     public func latestReconciliationDay() throws -> String? {
         withLock { reconciliations.keys.max() }
+    }
+
+    public func allReconciliations() throws -> [DailyReconciliationRecord] {
+        withLock { reconciliations.values.sorted { $0.date < $1.date } }
     }
 
     public func loadVault() throws -> LifetimeVaultRecord {

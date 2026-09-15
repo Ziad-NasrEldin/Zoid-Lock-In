@@ -59,6 +59,15 @@ public struct FilterFlowEvaluator: Sendable, Equatable {
     }
 
     public func verdict(for request: FilterFlowRequest) -> FilterVerdict {
+        let hard = hardVerdict(for: request)
+        if policy.mode == .calibration, hard == .drop {
+            return .softInfraction
+        }
+        return hard
+    }
+
+    /// Hard-lockdown decision before calibration remaps drops to warnings.
+    public func hardVerdict(for request: FilterFlowRequest) -> FilterVerdict {
         switch request.transport {
         case .other:
             return .allow
