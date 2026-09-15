@@ -5,8 +5,9 @@ import Foundation
 /// - `hard`: drop blacklisted flows and SIGKILL matched processes.
 /// - `soft`: pause process kills (gaming / emergency overlay). Packet filter
 ///   still drops unrelated hosts.
-/// - `calibration`: Slice 9 onboarding. Flows that would drop become
-///   `softInfraction` warnings; process kills are paused.
+/// - `calibration`: Slice 9 onboarding. Verified blacklisted hosts become
+///   `softInfraction` warnings (tracked, packets allowed). Unverified
+///   identities on inspected ports stay `.drop`. Process kills are paused.
 public enum EnforcementMode: String, Sendable, Equatable, Codable {
     case hard
     case soft
@@ -87,7 +88,7 @@ public struct EnforcementPolicy: Sendable, Equatable {
         )
     }
 
-    /// Slice 9: calibration forces `.soft` so flows warn instead of dropping.
+    /// Overlay the Slice 9 calibration / hard mode bit onto this policy.
     public func applying(calibrationMode mode: EnforcementMode) -> EnforcementPolicy {
         var copy = self
         copy.mode = mode

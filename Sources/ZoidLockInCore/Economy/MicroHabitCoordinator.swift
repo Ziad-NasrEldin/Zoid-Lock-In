@@ -252,6 +252,8 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
             )
         }
 
+        let twoFactorLocked = (governance.gatekeeper?.isEnrolled == true)
+            && (governance.gatekeeper?.isUnlocked != true)
         return MicroHabitsSnapshot(
             habits: rows,
             dailyHabitCredits: earned,
@@ -262,7 +264,9 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
             spendableBalance: tickerSnap.spendableBalance,
             weekdayCaption: tickerSnap.weekdayCaption,
             localDayKey: tickerSnap.localDayKey,
-            editorIsLocked: (lockSnap.isLocked && !lockSnap.isBypassEnabled) || lockSnap.integrityFailed
+            editorIsLocked: (lockSnap.isLocked && !lockSnap.isBypassEnabled)
+                || lockSnap.integrityFailed
+                || twoFactorLocked
         )
     }
 
@@ -322,6 +326,8 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
             if let habit = error as? MicroHabitError, let description = habit.errorDescription {
                 lastError = description
             } else if let lock = error as? GovernanceLockError, let description = lock.errorDescription {
+                lastError = description
+            } else if let gate = error as? SecurityGatekeeperError, let description = gate.errorDescription {
                 lastError = description
             } else {
                 lastError = error.localizedDescription

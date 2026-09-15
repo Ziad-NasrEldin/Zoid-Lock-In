@@ -14,7 +14,8 @@ import ZoidLockInCore
 public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Sendable {
     private let lock = NSLock()
     private var _policy: EnforcementPolicy
-    private let engine: ContentFilterEngine
+    private var engine: ContentFilterEngine
+    private var attachedProductionReader = false
 
     public var policy: EnforcementPolicy {
         get {
@@ -25,16 +26,35 @@ public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Senda
         set {
             lock.lock()
             _policy = newValue
+            engine.fallbackPolicy = newValue
+            lock.unlock()
+        }
+    }
+
+    public var infractionLog: (any SoftInfractionRecording)? {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return engine.infractionLog
+        }
+        set {
+            lock.lock()
+            engine.infractionLog = newValue
             lock.unlock()
         }
     }
 
     public init(
         policy: EnforcementPolicy = .lockedDown,
-        statusReader: (any FilterEnforcementStatusReading)? = nil
+        statusReader: (any FilterEnforcementStatusReading)? = nil,
+        infractionLog: (any SoftInfractionRecording)? = nil
     ) {
         self._policy = policy
-        self.engine = ContentFilterEngine(statusReader: statusReader, fallbackPolicy: policy)
+        self.engine = ContentFilterEngine(
+            statusReader: statusReader,
+            fallbackPolicy: policy,
+            infractionLog: infractionLog ?? InMemorySoftInfractionLog()
+        )
         super.init()
     }
 
@@ -60,6 +80,14 @@ public final class ContentFilterProvider: NEFilterDataProvider, @unchecked Senda
     }
 
     override public func startFilter(completionHandler: @escaping (Error?) -> Void) {
+        lock.lock()
+        if engine.statusReader == nil, !attachedProductionReader {
+            engine.statusReader = FileFilterStatusStore(
+                directory: URL(fileURLWithPath: FileEmergencyIncidentStore.defaultDirectoryPath)
+            )
+            attachedProductionReader = true
+        }
+        lock.unlock()
         completionHandler(nil)
     }
 

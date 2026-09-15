@@ -186,6 +186,16 @@ private struct CommandDashboardContainer: View {
             },
             onLock: {
                 session.lockSettings()
+            },
+            onEnroll: { password, confirm, secret, totp in
+                Task {
+                    await session.enrollSettings(
+                        password: password,
+                        confirmation: confirm,
+                        secret: secret,
+                        totp: totp
+                    )
+                }
             }
         )
     }
@@ -224,13 +234,20 @@ final class MenuBarSession: ObservableObject {
         let timeTravel = TimeTravelGuard()
         let fallbackDirectory = resolved.fileURL?.deletingLastPathComponent()
             ?? EncryptedStateStore.defaultApplicationSupportDirectory()
+        let gatekeeper = SecurityGatekeeper(
+            keychain: ZoidLockInKeychain(),
+            mail: AlertMailService(
+                configuration: AlertMailConfiguration(recipient: SecurityGatekeeper.defaultRecipient)
+            )
+        )
         let habitGovernance = GovernanceLockCoordinator(
             store: resolved,
             clock: MachContinuousTimeClock(),
             wallClock: SystemWallClock(),
             timeTravel: timeTravel,
             keyProvider: KeychainGovernanceKeyProvider(),
-            replicaSealStore: FileGovernanceSealStore(fallbackDirectory: fallbackDirectory)
+            replicaSealStore: FileGovernanceSealStore(fallbackDirectory: fallbackDirectory),
+            gatekeeper: gatekeeper
         )
         let pinnedTimeZone = habitGovernance.pinnedTimeZone
         let engine = ExchangeEngine(
@@ -251,7 +268,9 @@ final class MenuBarSession: ObservableObject {
             clock: MachContinuousTimeClock(),
             wallClock: SystemWallClock(),
             timeTravel: timeTravel,
-            timeZone: pinnedTimeZone
+            timeZone: pinnedTimeZone,
+            keyProvider: KeychainCalibrationKeyProvider(),
+            replicaSealStore: FileCalibrationSealStore(fallbackDirectory: fallbackDirectory)
         )
         habitGovernance.onBlocklistChanged = { rules in
             let snapshot = EnforcementPolicySnapshot(
@@ -261,12 +280,6 @@ final class MenuBarSession: ObservableObject {
                 try? await client.applyPolicy(snapshot)
             }
         }
-        let gatekeeper = SecurityGatekeeper(
-            keychain: ZoidLockInKeychain(),
-            mail: AlertMailService(
-                configuration: AlertMailConfiguration(recipient: SecurityGatekeeper.defaultRecipient)
-            )
-        )
         let shieldStore = EncryptedStateStore(
             fallbackDirectory: EncryptedStateStore.defaultApplicationSupportDirectory(),
             keyProvider: KeychainMobileShieldKeyProvider(),
@@ -342,13 +355,21 @@ final class MenuBarSession: ObservableObject {
             security: gatekeeper.snapshot(),
             governance: habitGovernance.snapshot()
         )
-        lastPublishedMode = calibration.enforcementMode()
+        lastPublishedMode = nil
         Task {
-            try? await client.applyPolicy(
-                EnforcementPolicySnapshot(
-                    EnforcementPolicy(mode: calibration.enforcementMode())
+            do {
+                let mode = calibration.enforcementMode()
+                try await client.applyPolicy(
+                    EnforcementPolicySnapshot(
+                        EnforcementPolicy(mode: mode)
+                    )
                 )
-            )
+                await MainActor.run { [weak self] in
+                    self?.lastPublishedMode = mode
+                }
+            } catch {
+                _ = error
+            }
         }
 
         let coalescer = TickCoalescer()
@@ -403,6 +424,20 @@ final class MenuBarSession: ObservableObject {
         timer.resume()
     }
 
+    func enrollSettings(password: String, confirmation: String, secret: String, totp: String) async {
+        do {
+            _ = try gatekeeper.enroll(
+                password: password,
+                passwordConfirmation: confirmation,
+                totpSecret: secret,
+                totpCode: totp
+            )
+        } catch {
+            _ = error
+        }
+        refreshDashboard()
+    }
+
     func unlockSettings(password: String, totp: String) async {
         do {
             _ = try await gatekeeper.unlock(password: password, totp: totp)
@@ -418,12 +453,21 @@ final class MenuBarSession: ObservableObject {
     }
 
     private func publishCalibrationModeIfNeeded(_ mode: EnforcementMode) {
-        guard lastPublishedMode != mode else { return }
-        lastPublishedMode = mode
+        if lastPublishedMode == mode {
+            return
+        }
         Task {
-            try? await client.applyPolicy(
-                EnforcementPolicySnapshot(EnforcementPolicy(mode: mode))
-            )
+            do {
+                try await client.applyPolicy(
+                    EnforcementPolicySnapshot(EnforcementPolicy(mode: mode))
+                )
+                await MainActor.run { [weak self] in
+                    self?.lastPublishedMode = mode
+                }
+            } catch {
+                // Leave lastPublishedMode unchanged so subsequent ticks retry,
+                // especially Day 4 `.hard`.
+            }
         }
     }
 

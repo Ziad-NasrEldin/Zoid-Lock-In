@@ -74,4 +74,11 @@ public final class TimeTravelGuard: @unchecked Sendable {
             throw TimeTravelError.clockTampered(skewSeconds: lastObservedSkewSeconds)
         }
     }
+
+    /// Restores a persisted tamper bit. Once set, the flag never clears.
+    public func markTampered() {
+        lock.lock()
+        tampered = true
+        lock.unlock()
+    }
 }

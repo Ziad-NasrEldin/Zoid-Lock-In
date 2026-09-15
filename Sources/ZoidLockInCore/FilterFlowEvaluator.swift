@@ -61,6 +61,12 @@ public struct FilterFlowEvaluator: Sendable, Equatable {
     public func verdict(for request: FilterFlowRequest) -> FilterVerdict {
         let hard = hardVerdict(for: request)
         if policy.mode == .calibration, hard == .drop {
+            // Unverified identities (nil/empty/IP on inspected ports) stay
+            // fail-closed. Only a verified blacklisted hostname remaps to a
+            // tracked soft infraction.
+            if DomainFilterRules.verifiedHostname(request.hostname) == nil {
+                return .drop
+            }
             return .softInfraction
         }
         return hard

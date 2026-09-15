@@ -3,8 +3,10 @@ import Foundation
 public enum SecurityGatekeeperError: Error, Equatable, Sendable {
     case passwordTooShort(minimum: Int)
     case passwordMismatch
+    case passwordConfirmationMismatch
     case totpMismatch
     case notEnrolled
+    case alreadyEnrolled
     case notUnlocked
 }
 
@@ -15,10 +17,14 @@ extension SecurityGatekeeperError: LocalizedError {
             return "Password must be at least \(minimum) characters."
         case .passwordMismatch:
             return "Password does not match."
+        case .passwordConfirmationMismatch:
+            return "Password confirmation does not match."
         case .totpMismatch:
             return "Authenticator code is invalid."
         case .notEnrolled:
             return "Admin credentials have not been enrolled."
+        case .alreadyEnrolled:
+            return "Admin credentials are already enrolled."
         case .notUnlocked:
             return "Settings are locked. Authenticate with password and TOTP."
         }
@@ -46,6 +52,28 @@ public struct AdminAlertEvent: Sendable, Equatable {
         self.timestamp = timestamp
         self.recipient = recipient
         self.detail = detail
+    }
+}
+
+public struct AdminAuditRecord: Sendable, Equatable {
+    public var kind: AdminAlertKind
+    public var timestamp: Date
+    public var recipient: String
+    public var emailDispatched: Bool
+    public var errorDescription: String?
+
+    public init(
+        kind: AdminAlertKind,
+        timestamp: Date,
+        recipient: String,
+        emailDispatched: Bool,
+        errorDescription: String? = nil
+    ) {
+        self.kind = kind
+        self.timestamp = timestamp
+        self.recipient = recipient
+        self.emailDispatched = emailDispatched
+        self.errorDescription = errorDescription
     }
 }
 
@@ -77,19 +105,25 @@ public struct SecuritySettingsSnapshot: Sendable, Equatable {
     public var alertRecipient: String
     public var unlockError: String?
     public var lastAlertKind: AdminAlertKind?
+    public var mailDispatchFailed: Bool
+    public var lastAuditEmailDispatched: Bool?
 
     public init(
         isEnrolled: Bool,
         isUnlocked: Bool,
         alertRecipient: String,
         unlockError: String? = nil,
-        lastAlertKind: AdminAlertKind? = nil
+        lastAlertKind: AdminAlertKind? = nil,
+        mailDispatchFailed: Bool = false,
+        lastAuditEmailDispatched: Bool? = nil
     ) {
         self.isEnrolled = isEnrolled
         self.isUnlocked = isUnlocked
         self.alertRecipient = alertRecipient
         self.unlockError = unlockError
         self.lastAlertKind = lastAlertKind
+        self.mailDispatchFailed = mailDispatchFailed
+        self.lastAuditEmailDispatched = lastAuditEmailDispatched
     }
 
     public static let lockedProof = SecuritySettingsSnapshot(
@@ -104,9 +138,16 @@ public struct SecuritySettingsSnapshot: Sendable, Equatable {
         alertRecipient: "founder@mavoid.com",
         lastAlertKind: .settingsUnlocked
     )
+
+    public static let unenrolledProof = SecuritySettingsSnapshot(
+        isEnrolled: false,
+        isUnlocked: false,
+        alertRecipient: "founder@mavoid.com"
+    )
 }
 
 /// 12+ character password + RFC 6238 TOTP gate. Credentials live in Keychain.
+/// Production must inject a real `KeychainDataStoring` — there is no in-memory default.
 public final class SecurityGatekeeper: @unchecked Sendable {
     public static let minimumPasswordLength = PasswordHasher.minimumLength
     public static let defaultRecipient = "founder@mavoid.com"
@@ -120,9 +161,11 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     private var unlocked = false
     private var lastError: String?
     private var lastAlertKind: AdminAlertKind?
+    private var replay = TOTPReplayWindow()
+    private var auditEvents: [AdminAuditRecord] = []
 
     public init(
-        keychain: any KeychainDataStoring = InMemoryKeychainStore(),
+        keychain: any KeychainDataStoring,
         mail: any AdminAlertDispatching = NoOpAdminAlertDispatcher(),
         wallClock: any WallClockProviding = SystemWallClock(),
         service: String = ZoidLockInKeychain.securityService
@@ -131,6 +174,11 @@ public final class SecurityGatekeeper: @unchecked Sendable {
         self.mail = mail
         self.wallClock = wallClock
         self.service = service
+        if let stored = keychain.data(service: service, account: ZoidLockInKeychain.totpLastWindowAccount),
+           let text = String(data: stored, encoding: .utf8),
+           let value = UInt64(text) {
+            replay.lastUsedTOTPWindow = value
+        }
     }
 
     public var isUnlocked: Bool {
@@ -139,6 +187,10 @@ public final class SecurityGatekeeper: @unchecked Sendable {
 
     public var isEnrolled: Bool {
         storedPasswordHash() != nil && storedTOTPSecret() != nil
+    }
+
+    public var lastUsedTOTPWindow: UInt64? {
+        withMutex { replay.lastUsedTOTPWindow }
     }
 
     public var alertRecipient: String {
@@ -152,28 +204,66 @@ public final class SecurityGatekeeper: @unchecked Sendable {
 
     public func snapshot() -> SecuritySettingsSnapshot {
         withMutex {
-            SecuritySettingsSnapshot(
+            let failed = auditEvents.last.map { !$0.emailDispatched } ?? false
+            return SecuritySettingsSnapshot(
                 isEnrolled: storedPasswordHash() != nil && storedTOTPSecret() != nil,
                 isUnlocked: unlocked,
                 alertRecipient: alertRecipient,
                 unlockError: lastError,
-                lastAlertKind: lastAlertKind
+                lastAlertKind: lastAlertKind,
+                mailDispatchFailed: failed,
+                lastAuditEmailDispatched: auditEvents.last?.emailDispatched
             )
         }
+    }
+
+    public func auditLog() -> [AdminAuditRecord] {
+        withMutex { auditEvents }
     }
 
     @discardableResult
     public func enroll(
         password: String,
+        passwordConfirmation: String? = nil,
         totpSecret: String? = nil,
+        totpCode: String? = nil,
         recipient: String = SecurityGatekeeper.defaultRecipient
     ) throws -> SecurityEnrollment {
+        if isEnrolled {
+            rememberError(SecurityGatekeeperError.alreadyEnrolled.localizedDescription)
+            throw SecurityGatekeeperError.alreadyEnrolled
+        }
+        if let passwordConfirmation, password != passwordConfirmation {
+            rememberError(SecurityGatekeeperError.passwordConfirmationMismatch.localizedDescription)
+            throw SecurityGatekeeperError.passwordConfirmationMismatch
+        }
         do {
             try PasswordHasher.validateLength(password)
         } catch {
+            rememberError(SecurityGatekeeperError.passwordTooShort(minimum: Self.minimumPasswordLength).localizedDescription)
             throw SecurityGatekeeperError.passwordTooShort(minimum: Self.minimumPasswordLength)
         }
         let secret = try totpSecret.map { try normalizeSecret($0) } ?? TOTPEngine.generateSecret()
+        let now = wallClock.now()
+        var enrollmentWindow: UInt64?
+        if let totpCode {
+            do {
+                guard let window = try TOTPEngine.matchingCounter(
+                    code: totpCode,
+                    base32Secret: secret,
+                    at: now
+                ) else {
+                    rememberError(SecurityGatekeeperError.totpMismatch.localizedDescription)
+                    throw SecurityGatekeeperError.totpMismatch
+                }
+                enrollmentWindow = window
+            } catch let error as SecurityGatekeeperError {
+                throw error
+            } catch {
+                rememberError(SecurityGatekeeperError.totpMismatch.localizedDescription)
+                throw SecurityGatekeeperError.totpMismatch
+            }
+        }
         let hash = try PasswordHasher.hash(password)
         try keychain.setData(
             Data(hash.utf8),
@@ -190,6 +280,23 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             service: service,
             account: ZoidLockInKeychain.alertRecipientAccount
         )
+        if let enrollmentWindow {
+            let accepted = withMutex { replay.consume(enrollmentWindow) }
+            if accepted {
+                persistReplayWindow(enrollmentWindow)
+                markUnlocked(alertKind: .settingsUnlocked)
+                let event = AdminAlertEvent(
+                    kind: .settingsUnlocked,
+                    timestamp: now,
+                    recipient: recipient,
+                    detail: "2FA enrollment completed"
+                )
+                Task { [weak self] in
+                    await self?.dispatchAlertRecordingFailure(event)
+                }
+            }
+        }
+        withMutex { lastError = nil }
         return SecurityEnrollment(
             totpSecretBase32: secret,
             otpAuthURL: TOTPEngine.otpAuthURL(secret: secret)
@@ -202,14 +309,15 @@ public final class SecurityGatekeeper: @unchecked Sendable {
         return PasswordHasher.verify(password, against: stored)
     }
 
-    public func verifyTOTP(_ code: String, at date: Date? = nil) -> Bool {
+    /// Production always uses `wallClock.now()`. Tests inject `ManualWallClock`.
+    public func verifyTOTP(_ code: String) -> Bool {
         guard let secret = storedTOTPSecret() else { return false }
-        return (try? TOTPEngine.verify(code: code, base32Secret: secret, at: date ?? wallClock.now())) ?? false
+        return (try? TOTPEngine.verify(code: code, base32Secret: secret, at: wallClock.now())) ?? false
     }
 
     @discardableResult
-    public func unlock(password: String, totp: String, at date: Date? = nil) async throws -> SecuritySession {
-        let moment = date ?? wallClock.now()
+    public func unlock(password: String, totp: String) async throws -> SecuritySession {
+        let moment = wallClock.now()
         guard isEnrolled else {
             rememberError(SecurityGatekeeperError.notEnrolled.localizedDescription)
             throw SecurityGatekeeperError.notEnrolled
@@ -218,12 +326,16 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             rememberError(SecurityGatekeeperError.passwordMismatch.localizedDescription)
             throw SecurityGatekeeperError.passwordMismatch
         }
-        guard verifyTOTP(totp, at: moment) else {
+        let window: UInt64
+        do {
+            window = try consumeTOTPWindow(totp, at: moment)
+        } catch {
             rememberError(SecurityGatekeeperError.totpMismatch.localizedDescription)
             throw SecurityGatekeeperError.totpMismatch
         }
 
         markUnlocked(alertKind: .settingsUnlocked)
+        persistReplayWindow(window)
 
         let recipient = alertRecipient
         let event = AdminAlertEvent(
@@ -232,11 +344,11 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             recipient: recipient,
             detail: "2FA settings unlocked"
         )
-        try? await mail.dispatchAdminAlert(event)
+        await dispatchAlertRecordingFailure(event)
         return SecuritySession(unlockedAt: moment, recipient: recipient)
     }
 
-    public func noteConfigurationMutation(detail: String = "Administrative configuration mutated") async {
+    public func noteConfigurationMutation(detail: String = "Administrative configuration mutated") {
         guard isUnlocked else { return }
         let event = AdminAlertEvent(
             kind: .configurationMutated,
@@ -245,7 +357,9 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             detail: detail
         )
         withMutex { lastAlertKind = .configurationMutated }
-        try? await mail.dispatchAdminAlert(event)
+        Task { [weak self] in
+            await self?.dispatchAlertRecordingFailure(event)
+        }
     }
 
     public func lockSettings() {
@@ -258,6 +372,65 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     public func requireUnlocked() throws {
         guard isUnlocked else {
             throw SecurityGatekeeperError.notUnlocked
+        }
+    }
+
+    private func consumeTOTPWindow(_ code: String, at moment: Date) throws -> UInt64 {
+        guard let secret = storedTOTPSecret() else {
+            throw SecurityGatekeeperError.notEnrolled
+        }
+        guard let window = try TOTPEngine.matchingCounter(
+            code: code,
+            base32Secret: secret,
+            at: moment
+        ) else {
+            throw SecurityGatekeeperError.totpMismatch
+        }
+        let accepted = withMutex { replay.consume(window) }
+        guard accepted else {
+            throw SecurityGatekeeperError.totpMismatch
+        }
+        return window
+    }
+
+    private func persistReplayWindow(_ window: UInt64) {
+        try? keychain.setData(
+            Data(String(window).utf8),
+            service: service,
+            account: ZoidLockInKeychain.totpLastWindowAccount
+        )
+    }
+
+    private func dispatchAlertRecordingFailure(_ event: AdminAlertEvent) async {
+        do {
+            try await mail.dispatchAdminAlert(event)
+            recordAudit(
+                AdminAuditRecord(
+                    kind: event.kind,
+                    timestamp: event.timestamp,
+                    recipient: event.recipient,
+                    emailDispatched: true
+                )
+            )
+        } catch {
+            recordAudit(
+                AdminAuditRecord(
+                    kind: event.kind,
+                    timestamp: event.timestamp,
+                    recipient: event.recipient,
+                    emailDispatched: false,
+                    errorDescription: error.localizedDescription
+                )
+            )
+        }
+    }
+
+    private func recordAudit(_ record: AdminAuditRecord) {
+        withMutex {
+            auditEvents.append(record)
+            if !record.emailDispatched, lastError == nil {
+                lastError = record.errorDescription
+            }
         }
     }
 

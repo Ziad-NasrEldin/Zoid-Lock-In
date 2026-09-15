@@ -179,7 +179,9 @@ final class SQLiteDatabase: @unchecked Sendable {
             return .appendOnly
         }
         if message.localizedCaseInsensitiveContains("governance_state is sealed")
-            || message.localizedCaseInsensitiveContains("governance_seal is sealed") {
+            || message.localizedCaseInsensitiveContains("governance_seal is sealed")
+            || message.localizedCaseInsensitiveContains("calibration_state is sealed")
+            || message.localizedCaseInsensitiveContains("calibration_seal is sealed") {
             return .sealed
         }
         return .sqlite(code: code, message: message)

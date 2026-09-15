@@ -1,7 +1,11 @@
+import CryptoKit
 import Foundation
 
 /// First-launch 3-day audit window. Days 1–3 warn; Day 4 at local 00:00:00
 /// (or 72h monotonic when the wall clock is untrusted) engages hard lockdown.
+///
+/// Missing, corrupt, or HMAC-mismatched `calibration_state` fail-closes to
+/// `.hard` and never mints a replacement 3-day window.
 public final class CalibrationCoordinator: @unchecked Sendable {
     public static let softModeDuration: TimeInterval = 72 * 60 * 60
     public static let softCivilDays = 3
@@ -12,8 +16,12 @@ public final class CalibrationCoordinator: @unchecked Sendable {
     public let timeTravel: TimeTravelGuard
     public let civilClock: LocalCivilClock
     public let bootSessionUUID: String
+    public let replicaSealStore: (any CalibrationSealPersisting)?
 
+    private let keyProvider: any CalibrationKeyProviding
     private let lock = NSRecursiveLock()
+    private var cachedKey: SymmetricKey?
+    private var failedClosed = false
 
     public init(
         store: any CalibrationStoring,
@@ -21,7 +29,9 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         wallClock: any WallClockProviding = SystemWallClock(),
         timeTravel: TimeTravelGuard = TimeTravelGuard(),
         timeZone: TimeZone = .current,
-        bootSessionUUID: String = BootSession.currentUUID()
+        bootSessionUUID: String = BootSession.currentUUID(),
+        keyProvider: any CalibrationKeyProviding = InMemoryCalibrationKeyProvider(),
+        replicaSealStore: (any CalibrationSealPersisting)? = nil
     ) {
         self.store = store
         self.clock = clock
@@ -29,6 +39,8 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         self.timeTravel = timeTravel
         self.civilClock = LocalCivilClock(timeZone: timeZone)
         self.bootSessionUUID = bootSessionUUID
+        self.keyProvider = keyProvider
+        self.replicaSealStore = replicaSealStore
         restoreTimeTravelOrigin()
     }
 
@@ -75,14 +87,14 @@ public final class CalibrationCoordinator: @unchecked Sendable {
                 phase: .hardLockdown,
                 state: state,
                 remainingSeconds: 0,
-                isClockTampered: isTampered
+                isClockTampered: isTampered || state.isTampered
             )
         }
 
         let wallReached = nowWall >= state.transitionToHardAt
         let monoBackstop = accruedMonotonic + 0.000_1 >= softModeDuration
         let shouldComplete: Bool
-        if isTampered {
+        if isTampered || state.isTampered {
             shouldComplete = monoBackstop
         } else {
             shouldComplete = wallReached || monoBackstop
@@ -91,16 +103,17 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         if shouldComplete {
             var completed = state
             completed.isCompleted = true
+            completed.isTampered = completed.isTampered || isTampered
             return CalibrationSnapshot(
                 phase: .hardLockdown,
                 state: completed,
                 remainingSeconds: 0,
-                isClockTampered: isTampered
+                isClockTampered: isTampered || completed.isTampered
             )
         }
 
         let remaining: TimeInterval
-        if isTampered {
+        if isTampered || state.isTampered {
             remaining = max(0, softModeDuration - accruedMonotonic)
         } else {
             remaining = max(0, state.transitionToHardAt.timeIntervalSince(nowWall))
@@ -111,13 +124,13 @@ public final class CalibrationCoordinator: @unchecked Sendable {
             nowWall: nowWall,
             accruedMonotonic: accruedMonotonic,
             civilClock: civilClock,
-            isTampered: isTampered
+            isTampered: isTampered || state.isTampered
         )
         return CalibrationSnapshot(
             phase: phase,
             state: state,
             remainingSeconds: remaining,
-            isClockTampered: isTampered
+            isClockTampered: isTampered || state.isTampered
         )
     }
 
@@ -142,8 +155,14 @@ public final class CalibrationCoordinator: @unchecked Sendable {
     }
 
     private func restoreTimeTravelOrigin() {
-        guard let state = try? store.loadCalibrationState() else { return }
-        guard state.bootSessionUUID == bootSessionUUID else { return }
+        guard let state = try? verifiedStateLocked() else { return }
+        if state.isTampered {
+            timeTravel.markTampered()
+        }
+        guard state.bootSessionUUID == bootSessionUUID else {
+            timeTravel.markTampered()
+            return
+        }
         let wall = state.lastObservedWall ?? state.calibrationStartedAt
         let mono = state.lastObservedMonotonic ?? state.calibrationStartedMonotonic
         timeTravel.restoreOriginIfNeeded(wall: wall, monotonic: mono)
@@ -153,39 +172,90 @@ public final class CalibrationCoordinator: @unchecked Sendable {
     private func evaluateAndPersistLocked() -> CalibrationSnapshot {
         let nowWall = wallClock.now()
         let nowMono = clock.nowSeconds()
-        var state = loadOrStartLocked(nowWall: nowWall, nowMono: nowMono)
+        let state: CalibrationState
+        do {
+            state = try loadOrStartLocked(nowWall: nowWall, nowMono: nowMono)
+        } catch {
+            return failClosedSnapshotLocked(nowWall: nowWall, nowMono: nowMono)
+        }
+
         _ = timeTravel.observe(wall: nowWall, monotonic: nowMono)
-        state = accrueLocked(state, nowWall: nowWall, nowMono: nowMono)
+        var next = accrueLocked(state, nowWall: nowWall, nowMono: nowMono)
+        if timeTravel.isTampered {
+            next.isTampered = true
+        }
         var evaluated = Self.evaluate(
-            state: state,
+            state: next,
             nowWall: nowWall,
-            accruedMonotonic: state.accruedMonotonicElapsed,
+            accruedMonotonic: next.accruedMonotonicElapsed,
             civilClock: civilClock,
-            isTampered: timeTravel.isTampered
+            isTampered: timeTravel.isTampered || next.isTampered
         )
-        state = evaluated.state
-        state.lastObservedWall = nowWall
-        state.lastObservedMonotonic = nowMono
+        next = evaluated.state
+        next.lastObservedWall = nowWall
+        next.lastObservedMonotonic = nowMono
+        next.isTampered = next.isTampered || timeTravel.isTampered
         evaluated = CalibrationSnapshot(
             phase: evaluated.phase,
-            state: state,
+            state: next,
             remainingSeconds: evaluated.remainingSeconds,
-            isClockTampered: evaluated.isClockTampered
+            isClockTampered: evaluated.isClockTampered || next.isTampered
         )
-        try? store.saveCalibrationState(state)
+        try? persistStateLocked(next)
         return evaluated
     }
 
-    private func loadOrStartLocked(nowWall: Date, nowMono: TimeInterval) -> CalibrationState {
-        if var existing = try? store.loadCalibrationState() {
+    private func loadOrStartLocked(nowWall: Date, nowMono: TimeInterval) throws -> CalibrationState {
+        if failedClosed {
+            throw CalibrationError.integrityFailed
+        }
+
+        let sqlite: CalibrationState?
+        do {
+            sqlite = try store.loadCalibrationState()
+        } catch {
+            throw CalibrationError.integrityFailed
+        }
+
+        let envelope: CalibrationSealEnvelope?
+        do {
+            envelope = try store.loadCalibrationEnvelope()
+        } catch {
+            throw CalibrationError.integrityFailed
+        }
+
+        let replica: CalibrationSealEnvelope?
+        do {
+            replica = try replicaSealStore?.loadEnvelope()
+        } catch {
+            throw CalibrationError.integrityFailed
+        }
+
+        let key = try sealKeyLocked()
+        switch try CalibrationIntegrity.verify(
+            sqlite: sqlite,
+            envelope: envelope,
+            replica: replica,
+            key: key
+        ) {
+        case .firstLaunch:
+            return startWindowLocked(nowWall: nowWall, nowMono: nowMono)
+        case .loaded(var existing):
             if existing.bootSessionUUID != bootSessionUUID {
                 existing.bootSessionUUID = bootSessionUUID
                 existing.lastObservedMonotonic = nowMono
                 existing.lastObservedWall = nowWall
+                existing.isTampered = true
+                timeTravel.markTampered()
+            }
+            if existing.isTampered {
+                timeTravel.markTampered()
             }
             return existing
         }
+    }
 
+    private func startWindowLocked(nowWall: Date, nowMono: TimeInterval) -> CalibrationState {
         let transition = civilClock.startOfDay(addingDays: Self.softCivilDays, to: nowWall)
         let started = CalibrationState(
             calibrationStartedAt: nowWall,
@@ -195,12 +265,33 @@ public final class CalibrationCoordinator: @unchecked Sendable {
             transitionToHardAt: transition,
             lastObservedWall: nowWall,
             lastObservedMonotonic: nowMono,
-            accruedMonotonicElapsed: 0
+            accruedMonotonicElapsed: 0,
+            isTampered: false,
+            sequence: 0
         )
         timeTravel.restoreOriginIfNeeded(wall: nowWall, monotonic: nowMono)
         _ = timeTravel.observe(wall: nowWall, monotonic: nowMono)
-        try? store.saveCalibrationState(started)
+        try? persistStateLocked(started)
         return started
+    }
+
+    private func failClosedSnapshotLocked(nowWall: Date, nowMono: TimeInterval) -> CalibrationSnapshot {
+        failedClosed = true
+        timeTravel.markTampered()
+        var hard = CalibrationState.failClosedHard(
+            nowWall: nowWall,
+            nowMono: nowMono,
+            bootSessionUUID: bootSessionUUID
+        )
+        hard.isCompleted = true
+        hard.isTampered = true
+        try? persistStateLocked(hard)
+        return CalibrationSnapshot(
+            phase: .hardLockdown,
+            state: hard,
+            remainingSeconds: 0,
+            isClockTampered: true
+        )
     }
 
     private func accrueLocked(
@@ -213,6 +304,8 @@ public final class CalibrationCoordinator: @unchecked Sendable {
             next.bootSessionUUID = bootSessionUUID
             next.lastObservedMonotonic = nowMono
             next.lastObservedWall = nowWall
+            next.isTampered = true
+            timeTravel.markTampered()
             return next
         }
 
@@ -224,6 +317,44 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         next.lastObservedMonotonic = nowMono
         next.lastObservedWall = nowWall
         return next
+    }
+
+    private func persistStateLocked(_ state: CalibrationState) throws {
+        var next = state
+        let previousSequence = (try? store.loadCalibrationState()?.sequence) ?? 0
+        next.sequence = max(state.sequence, previousSequence) + 1
+        let key = try sealKeyLocked()
+        let envelope = try CalibrationSeal.seal(CalibrationSealPayload(next), key: key)
+        try replicaSealStore?.saveEnvelope(envelope)
+        try store.saveCalibrationEnvelope(envelope)
+        try store.saveCalibrationState(next)
+    }
+
+    private func verifiedStateLocked() throws -> CalibrationState {
+        let sqlite = try store.loadCalibrationState()
+        let envelope = try store.loadCalibrationEnvelope()
+        let replica = try replicaSealStore?.loadEnvelope()
+        let key = try sealKeyLocked()
+        switch try CalibrationIntegrity.verify(
+            sqlite: sqlite,
+            envelope: envelope,
+            replica: replica,
+            key: key
+        ) {
+        case .firstLaunch:
+            throw CalibrationError.integrityFailed
+        case .loaded(let state):
+            return state
+        }
+    }
+
+    private func sealKeyLocked() throws -> SymmetricKey {
+        if let cachedKey {
+            return cachedKey
+        }
+        let key = try keyProvider.loadOrCreate()
+        cachedKey = key
+        return key
     }
 
     private func withLock<T>(_ body: () throws -> T) rethrows -> T {

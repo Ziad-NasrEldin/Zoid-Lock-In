@@ -11,6 +11,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     public let bootSessionUUID: String
     public let isCooldownBypassEnabled: Bool
     public let replicaSealStore: (any GovernanceSealPersisting)?
+    public let gatekeeper: SecurityGatekeeper?
 
     public var onAmenityPricesChanged: (([AmenityKind: Double]) -> Void)?
     public var onBlocklistChanged: ((DomainFilterRules) -> Void)?
@@ -30,7 +31,8 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         environment: [String: String] = ProcessInfo.processInfo.environment,
         keyProvider: any GovernanceKeyProviding = InMemoryGovernanceKeyProvider(),
         replicaSealStore: (any GovernanceSealPersisting)? = nil,
-        pinnedTimeZone: TimeZone = .current
+        pinnedTimeZone: TimeZone = .current,
+        gatekeeper: SecurityGatekeeper? = nil
     ) {
         self.init(
             store: store,
@@ -42,6 +44,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
             keyProvider: keyProvider,
             replicaSealStore: replicaSealStore,
             pinnedTimeZone: pinnedTimeZone,
+            gatekeeper: gatekeeper,
             testConfiguration: nil
         )
     }
@@ -56,6 +59,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         keyProvider: any GovernanceKeyProviding = InMemoryGovernanceKeyProvider(),
         replicaSealStore: (any GovernanceSealPersisting)? = nil,
         pinnedTimeZone: TimeZone = .current,
+        gatekeeper: SecurityGatekeeper? = nil,
         testConfiguration: GovernanceLockTestConfiguration?
     ) {
         self.store = store
@@ -65,6 +69,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         self.bootSessionUUID = bootSessionUUID
         self.keyProvider = keyProvider
         self.replicaSealStore = replicaSealStore
+        self.gatekeeper = gatekeeper
         self.defaultPinnedTimeZone = pinnedTimeZone
         let injectedBypass = testConfiguration?.bypassCooldown == true
         #if DEBUG
@@ -146,9 +151,11 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     public func performMutation<T>(_ body: () throws -> T) throws -> T {
         try withLock {
             try ensureMutableLocked()
+            try requireSecurityUnlockedLocked()
             let result = try body()
             try recordMutationLocked()
             publishLiveSettingsLocked()
+            gatekeeper?.noteConfigurationMutation()
             return result
         }
     }
@@ -157,8 +164,10 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     public func recordMutation() throws -> GovernanceState {
         try withLock {
             try ensureMutableLocked()
+            try requireSecurityUnlockedLocked()
             let state = try recordMutationLocked()
             publishLiveSettingsLocked()
+            gatekeeper?.noteConfigurationMutation()
             return state
         }
     }
@@ -259,6 +268,11 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         if remaining > 0 {
             throw GovernanceLockError.cooldownActive(remainingSeconds: remaining)
         }
+    }
+
+    private func requireSecurityUnlockedLocked() throws {
+        guard let gatekeeper, gatekeeper.isEnrolled else { return }
+        try gatekeeper.requireUnlocked()
     }
 
     @discardableResult

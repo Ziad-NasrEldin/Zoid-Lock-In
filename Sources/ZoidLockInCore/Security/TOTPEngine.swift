@@ -52,23 +52,50 @@ public enum TOTPEngine: Sendable {
         timeStep: TimeInterval = TOTPEngine.timeStep,
         allowedWindows: Int = TOTPEngine.allowedWindows
     ) -> Bool {
+        matchingCounter(
+            code: code,
+            secretBytes: secretBytes,
+            at: date,
+            digits: digits,
+            timeStep: timeStep,
+            allowedWindows: allowedWindows
+        ) != nil
+    }
+
+    /// RFC 6238 window counter that matched `code`, or nil. Callers persist
+    /// the counter and reject a second consume of the same window.
+    public static func matchingCounter(
+        code: String,
+        secretBytes: Data,
+        at date: Date,
+        digits: Int = TOTPEngine.digits,
+        timeStep: TimeInterval = TOTPEngine.timeStep,
+        allowedWindows: Int = TOTPEngine.allowedWindows
+    ) -> UInt64? {
         let trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count == digits, trimmed.allSatisfy(\.isNumber) else {
-            return false
+            return nil
         }
         let counter = Int64(date.timeIntervalSince1970 / timeStep)
         let window = max(0, allowedWindows)
+        var matched: UInt64?
         for offset in -window...window {
+            let candidateCounter = UInt64(bitPattern: counter + Int64(offset))
             let candidate = hotp(
                 secret: secretBytes,
-                counter: UInt64(bitPattern: counter + Int64(offset)),
+                counter: candidateCounter,
                 digits: digits
             )
             if PasswordHasher.timingSafeEqual(Array(candidate.utf8), Array(trimmed.utf8)) {
-                return true
+                if offset == 0 {
+                    return candidateCounter
+                }
+                if matched == nil {
+                    matched = candidateCounter
+                }
             }
         }
-        return false
+        return matched
     }
 
     public static func verify(
@@ -79,6 +106,21 @@ public enum TOTPEngine: Sendable {
     ) throws -> Bool {
         let secret = try Base32.decode(base32Secret)
         return verify(
+            code: code,
+            secretBytes: Data(secret),
+            at: date,
+            allowedWindows: allowedWindows
+        )
+    }
+
+    public static func matchingCounter(
+        code: String,
+        base32Secret: String,
+        at date: Date,
+        allowedWindows: Int = TOTPEngine.allowedWindows
+    ) throws -> UInt64? {
+        let secret = try Base32.decode(base32Secret)
+        return matchingCounter(
             code: code,
             secretBytes: Data(secret),
             at: date,
@@ -108,6 +150,24 @@ public enum TOTPEngine: Sendable {
             value *= 10
         }
         return value
+    }
+}
+
+/// Last-used RFC 6238 counter. The same 6-digit code cannot be accepted twice
+/// inside the active window.
+public struct TOTPReplayWindow: Sendable, Equatable {
+    public var lastUsedTOTPWindow: UInt64?
+
+    public init(lastUsedTOTPWindow: UInt64? = nil) {
+        self.lastUsedTOTPWindow = lastUsedTOTPWindow
+    }
+
+    public mutating func consume(_ window: UInt64) -> Bool {
+        if lastUsedTOTPWindow == window {
+            return false
+        }
+        lastUsedTOTPWindow = window
+        return true
     }
 }
 

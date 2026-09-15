@@ -8,16 +8,24 @@ public enum DesktopDashboardProofError: Error, Equatable, Sendable {
 
 /// Renders `CommandDashboardView` to a high-resolution PNG without showing a window.
 public enum DesktopDashboardProofRenderer: Sendable {
+    public static var screenshotsDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("screenshots", isDirectory: true)
+    }
+
     public static let canvasSize = CGSize(width: 1200, height: 800)
     public static let defaultScale: CGFloat = 2
 
-    public static let defaultProofURL = URL(
-        fileURLWithPath: "/Users/ziadnasreldin/Work/GitHub/Zoid Lock In/screenshots/desktop_dashboard_proof.png"
-    )
+    public static var defaultProofURL: URL {
+        screenshotsDirectory.appendingPathComponent("desktop_dashboard_proof.png")
+    }
 
-    public static let calibrationProofURL = URL(
-        fileURLWithPath: "/Users/ziadnasreldin/Work/GitHub/Zoid Lock In/screenshots/calibration_mode_proof.png"
-    )
+    public static var calibrationProofURL: URL {
+        screenshotsDirectory.appendingPathComponent("calibration_mode_proof.png")
+    }
 
     @MainActor
     public static func renderPNG(
@@ -68,7 +76,7 @@ public enum DesktopDashboardProofRenderer: Sendable {
     public static func renderProofSet(
         scale: CGFloat = defaultScale
     ) throws {
-        try renderPNG(snapshot: .proof, to: defaultProofURL, scale: scale)
+        try renderPNG(snapshot: .hardLockProof, to: defaultProofURL, scale: scale)
         try renderPNG(snapshot: .proof, to: calibrationProofURL, scale: scale)
     }
 }

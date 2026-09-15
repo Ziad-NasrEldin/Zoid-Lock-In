@@ -46,6 +46,10 @@ public struct ZoidLockInKeychain: KeychainDataStoring {
     public static let passwordHashAccount = "admin-password-hash"
     public static let totpSecretAccount = "admin-totp-secret"
     public static let alertRecipientAccount = "alert-mail-recipient"
+    public static let totpLastWindowAccount = "admin-totp-last-window"
+    public static let calibrationService = "com.mavoid.zoidlockin.calibration"
+    public static let calibrationKeyAccount = "com.mavoid.zoidlockin.calibration.key"
+    public static let calibrationSealAccount = "com.mavoid.zoidlockin.calibration.seal"
 
     public init() {}
 

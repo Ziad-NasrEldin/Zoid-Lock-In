@@ -161,16 +161,19 @@ public protocol FilterEnforcementStatusPublishing: Sendable {
 
 /// Evaluates flows against a query-only daemon snapshot. Used by
 /// `ContentFilterProvider` and by tests that cannot construct `NEFilterDataProvider`.
-public struct ContentFilterEngine: Sendable {
+public struct ContentFilterEngine: @unchecked Sendable {
     public var statusReader: (any FilterEnforcementStatusReading)?
     public var fallbackPolicy: EnforcementPolicy
+    public var infractionLog: (any SoftInfractionRecording)?
 
     public init(
         statusReader: (any FilterEnforcementStatusReading)? = nil,
-        fallbackPolicy: EnforcementPolicy = .lockedDown
+        fallbackPolicy: EnforcementPolicy = .lockedDown,
+        infractionLog: (any SoftInfractionRecording)? = nil
     ) {
         self.statusReader = statusReader
         self.fallbackPolicy = fallbackPolicy
+        self.infractionLog = infractionLog
     }
 
     public func currentSnapshot() -> FilterEnforcementSnapshot {
@@ -191,9 +194,12 @@ public struct ContentFilterEngine: Sendable {
         port: UInt16?,
         transport: TransportProtocol
     ) -> FilterVerdict {
-        FilterFlowEvaluator(snapshot: currentSnapshot()).verdict(
-            for: FilterFlowRequest(hostname: hostname, port: port, transport: transport)
-        )
+        let request = FilterFlowRequest(hostname: hostname, port: port, transport: transport)
+        let decision = FilterFlowEvaluator(snapshot: currentSnapshot()).verdict(for: request)
+        if decision == .softInfraction {
+            infractionLog?.recordSoftInfraction(SoftInfractionEvent(request))
+        }
+        return decision
     }
 }
 

@@ -99,7 +99,13 @@ struct Slice9DesktopDashboardTests {
             policy.flowVerdict(hostname: "youtube.com", port: 443, transport: .tcp) == .softInfraction
         )
         #expect(
-            policy.flowVerdict(hostname: nil, port: 443, transport: .udp) == .softInfraction
+            policy.flowVerdict(hostname: nil, port: 443, transport: .udp) == .drop
+        )
+        #expect(
+            policy.flowVerdict(hostname: "", port: 443, transport: .tcp) == .drop
+        )
+        #expect(
+            policy.flowVerdict(hostname: "1.1.1.1", port: 443, transport: .tcp) == .drop
         )
         #expect(
             policy.flowVerdict(hostname: "apple.com", port: 443, transport: .tcp) == .allow
@@ -245,19 +251,19 @@ struct Slice9DesktopDashboardTests {
         let now = wall.now()
         let code = try TOTPEngine.code(base32Secret: secret, at: now)
         do {
-            _ = try await gate.unlock(password: "wrong-password-long", totp: code, at: now)
+            _ = try await gate.unlock(password: "wrong-password-long", totp: code)
             Issue.record("wrong password must fail")
         } catch {
             #expect(error as? SecurityGatekeeperError == .passwordMismatch)
         }
         do {
-            _ = try await gate.unlock(password: "twelve chars+", totp: "000000", at: now)
+            _ = try await gate.unlock(password: "twelve chars+", totp: "000000")
             Issue.record("wrong TOTP must fail")
         } catch {
             #expect(error as? SecurityGatekeeperError == .totpMismatch)
         }
 
-        let session = try await gate.unlock(password: "twelve chars+", totp: code, at: now)
+        let session = try await gate.unlock(password: "twelve chars+", totp: code)
         #expect(session.recipient == "founder@mavoid.com")
         #expect(gate.isUnlocked)
         #expect(mail.events.count == 1)

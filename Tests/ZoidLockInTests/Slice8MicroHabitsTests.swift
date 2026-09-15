@@ -561,7 +561,8 @@ final class HabitHarness: @unchecked Sendable {
         mono: ManualMonotonicClock? = nil,
         timeTravel: TimeTravelGuard? = nil,
         keyProvider: InMemoryGovernanceKeyProvider? = nil,
-        replicaSealStore: (any GovernanceSealPersisting)? = nil
+        replicaSealStore: (any GovernanceSealPersisting)? = nil,
+        gatekeeper: SecurityGatekeeper? = nil
     ) {
         let civil = LocalCivilClock(timeZone: timeZone)
         let start = civil.date(year: year, month: month, day: day, hour: hour, minute: minute)
@@ -592,6 +593,7 @@ final class HabitHarness: @unchecked Sendable {
             keyProvider: self.keyProvider,
             replicaSealStore: replicaSealStore,
             pinnedTimeZone: timeZone,
+            gatekeeper: gatekeeper,
             testConfiguration: testConfiguration
         )
         let pinned = self.governance.pinnedTimeZone

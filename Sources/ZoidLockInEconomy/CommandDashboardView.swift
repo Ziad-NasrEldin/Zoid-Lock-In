@@ -6,6 +6,7 @@ public struct CommandDashboardView: View {
     public var snapshot: CommandDashboardSnapshot
     public var onUnlock: ((String, String) -> Void)?
     public var onLock: (() -> Void)?
+    public var onEnroll: ((String, String, String, String) -> Void)?
 
     @State private var tab: CommandDashboardTab
     @State private var filter: LedgerAuditKind
@@ -13,24 +14,30 @@ public struct CommandDashboardView: View {
     @State private var page: Int
     @State private var pageSize: Int
     @State private var password: String
+    @State private var confirmPassword: String
     @State private var totp: String
+    @State private var enrollSecret: String
     @State private var jumpPage: String
 
     public init(
         snapshot: CommandDashboardSnapshot,
         onUnlock: ((String, String) -> Void)? = nil,
-        onLock: (() -> Void)? = nil
+        onLock: (() -> Void)? = nil,
+        onEnroll: ((String, String, String, String) -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.onUnlock = onUnlock
         self.onLock = onLock
+        self.onEnroll = onEnroll
         _tab = State(initialValue: snapshot.selectedTab)
         _filter = State(initialValue: snapshot.ledgerPage.filter)
         _search = State(initialValue: snapshot.ledgerPage.search)
         _page = State(initialValue: snapshot.ledgerPage.page)
         _pageSize = State(initialValue: snapshot.ledgerPage.pageSize)
         _password = State(initialValue: "")
+        _confirmPassword = State(initialValue: "")
         _totp = State(initialValue: "")
+        _enrollSecret = State(initialValue: "")
         _jumpPage = State(initialValue: "\(snapshot.ledgerPage.page)")
     }
 
@@ -429,8 +436,10 @@ public struct CommandDashboardView: View {
 
                 if snapshot.security.isUnlocked {
                     unlockedSettings
-                } else {
+                } else if snapshot.security.isEnrolled {
                     lockedSettings
+                } else {
+                    enrollmentSettings
                 }
                 Spacer(minLength: 0)
             }
@@ -448,12 +457,19 @@ public struct CommandDashboardView: View {
 
     private var lockedSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                Text("2FA PROTECTION ACTIVE")
+                    .font(SumiInk.caption(10))
+                    .tracking(1.8)
+                    .foregroundStyle(SumiInk.seal)
+                Spacer()
+            }
             SecureField("Password (12+ characters)", text: $password)
                 .textFieldStyle(.plain)
                 .font(SumiInk.body(14))
                 .padding(10)
                 .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-            TextField("Authenticator code", text: $totp)
+            SecureField("Authenticator code", text: $totp)
                 .textFieldStyle(.plain)
                 .font(SumiInk.body(14))
                 .padding(10)
@@ -464,7 +480,10 @@ public struct CommandDashboardView: View {
                     .foregroundStyle(SumiInk.seal)
             }
             Button("UNLOCK SETTINGS") {
-                onUnlock?(password, totp)
+                let submittedPassword = password
+                let submittedTOTP = totp
+                clearSecrets()
+                onUnlock?(submittedPassword, submittedTOTP)
             }
             .buttonStyle(SumiInkSealButton())
             .disabled(password.count < SecurityGatekeeper.minimumPasswordLength || totp.count < 6)
@@ -473,18 +492,101 @@ public struct CommandDashboardView: View {
         .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
+    private var enrollmentSettings: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("ENROLL ADMIN 2FA")
+                .font(SumiInk.caption(10))
+                .tracking(1.8)
+                .foregroundStyle(SumiInk.seal)
+            Text("Set a 12+ character password and confirm a generated authenticator secret with a test code. Configuration writes stay open until enrollment completes.")
+                .font(SumiInk.body(13))
+                .foregroundStyle(SumiInk.inkMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("Password (12+ characters)", text: $password)
+                .textFieldStyle(.plain)
+                .font(SumiInk.body(14))
+                .padding(10)
+                .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+            SecureField("Confirm password", text: $confirmPassword)
+                .textFieldStyle(.plain)
+                .font(SumiInk.body(14))
+                .padding(10)
+                .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+            Text("Authenticator secret")
+                .font(SumiInk.caption(9))
+                .tracking(1.6)
+                .foregroundStyle(SumiInk.inkMuted)
+            Text(enrollSecret.isEmpty ? "Generating…" : enrollSecret)
+                .font(SumiInk.body(13))
+                .textSelection(.enabled)
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+            if !enrollSecret.isEmpty {
+                Text(TOTPEngine.otpAuthURL(secret: enrollSecret))
+                    .font(SumiInk.caption(9))
+                    .foregroundStyle(SumiInk.inkMuted)
+                    .textSelection(.enabled)
+            }
+            SecureField("Test authenticator code", text: $totp)
+                .textFieldStyle(.plain)
+                .font(SumiInk.body(14))
+                .padding(10)
+                .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+            if let error = snapshot.security.unlockError {
+                Text(error)
+                    .font(SumiInk.body(12))
+                    .foregroundStyle(SumiInk.seal)
+            }
+            Button("ENROLL 2FA") {
+                let submittedPassword = password
+                let submittedConfirm = confirmPassword
+                let submittedSecret = enrollSecret
+                let submittedTOTP = totp
+                clearSecrets()
+                onEnroll?(submittedPassword, submittedConfirm, submittedSecret, submittedTOTP)
+            }
+            .buttonStyle(SumiInkSealButton())
+            .disabled(
+                password.count < SecurityGatekeeper.minimumPasswordLength
+                    || confirmPassword != password
+                    || totp.count < 6
+                    || enrollSecret.isEmpty
+            )
+        }
+        .padding(18)
+        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+        .onAppear {
+            if enrollSecret.isEmpty {
+                enrollSecret = (try? TOTPEngine.generateSecret()) ?? ""
+            }
+        }
+    }
+
     private var unlockedSettings: some View {
         VStack(alignment: .leading, spacing: 12) {
             labeledValue("Alert mail recipient", snapshot.security.alertRecipient)
             labeledValue("Last alert", snapshot.security.lastAlertKind?.rawValue ?? "—")
-            labeledValue("Gate", "UNLOCKED · AUTHENTICATED")
+            labeledValue("Gate", "UNLOCKED · 2FA PROTECTION ACTIVE")
+            if snapshot.security.mailDispatchFailed {
+                Text("Alert mail failed. The session is recorded locally.")
+                    .font(SumiInk.body(12))
+                    .foregroundStyle(SumiInk.seal)
+            }
             Button("LOCK SETTINGS") {
+                clearSecrets()
                 onLock?()
             }
             .buttonStyle(SumiInkGhostButton())
         }
         .padding(18)
         .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+    }
+
+    private func clearSecrets() {
+        password = ""
+        confirmPassword = ""
+        totp = ""
     }
 
     private var governanceCard: some View {

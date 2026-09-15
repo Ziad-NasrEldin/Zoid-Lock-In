@@ -45,6 +45,29 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         try database.execute(sql)
     }
 
+    func withCalibrationWritePermit<T>(_ body: () throws -> T) throws -> T {
+        try performAtomically {
+            try database.execute(
+                """
+                INSERT INTO calibration_write_permit (id, allowed) VALUES (1, 1)
+                ON CONFLICT(id) DO UPDATE SET allowed = 1;
+                """
+            )
+            do {
+                let result = try body()
+                try database.execute(
+                    "UPDATE calibration_write_permit SET allowed = 0 WHERE id = 1;"
+                )
+                return result
+            } catch {
+                try? database.execute(
+                    "UPDATE calibration_write_permit SET allowed = 0 WHERE id = 1;"
+                )
+                throw error
+            }
+        }
+    }
+
     func withGovernanceWritePermit<T>(_ body: () throws -> T) throws -> T {
         try performAtomically {
             try database.execute(
@@ -642,6 +665,49 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             column: "accrued_monotonic_elapsed",
             definition: "REAL NOT NULL DEFAULT 0"
         )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "calibration_state",
+            column: "is_tampered",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "calibration_state",
+            column: "seal_sequence",
+            definition: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS calibration_write_permit (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                allowed INTEGER NOT NULL DEFAULT 0 CHECK (allowed IN (0, 1))
+            );
+            """
+        )
+        try database.execute(
+            "INSERT OR IGNORE INTO calibration_write_permit (id, allowed) VALUES (1, 0);"
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS calibration_seal (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                envelope_json TEXT NOT NULL
+            );
+            """
+        )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS calibration_infractions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                recorded_at TEXT NOT NULL,
+                hostname TEXT,
+                port INTEGER,
+                transport TEXT NOT NULL
+            );
+            """
+        )
+        try installCalibrationTriggers(database)
     }
 
     private static func dropGovernanceTriggers(_ database: SQLiteDatabase) throws {
@@ -713,6 +779,80 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             WHEN \(permitClosed)
             BEGIN
                 SELECT RAISE(ABORT, 'governance_seal is sealed');
+            END;
+            """
+        )
+    }
+
+    private static func dropCalibrationTriggers(_ database: SQLiteDatabase) throws {
+        try database.execute("DROP TRIGGER IF EXISTS calibration_state_guard_update;")
+        try database.execute("DROP TRIGGER IF EXISTS calibration_state_guard_delete;")
+        try database.execute("DROP TRIGGER IF EXISTS calibration_state_guard_insert;")
+        try database.execute("DROP TRIGGER IF EXISTS calibration_seal_guard_update;")
+        try database.execute("DROP TRIGGER IF EXISTS calibration_seal_guard_delete;")
+        try database.execute("DROP TRIGGER IF EXISTS calibration_seal_guard_insert;")
+    }
+
+    private static func installCalibrationTriggers(_ database: SQLiteDatabase) throws {
+        try dropCalibrationTriggers(database)
+        let permitClosed = "COALESCE((SELECT allowed FROM calibration_write_permit WHERE id = 1), 0) = 0"
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS calibration_state_guard_update
+            BEFORE UPDATE ON calibration_state
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'calibration_state is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS calibration_state_guard_delete
+            BEFORE DELETE ON calibration_state
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'calibration_state is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS calibration_state_guard_insert
+            BEFORE INSERT ON calibration_state
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'calibration_state is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS calibration_seal_guard_update
+            BEFORE UPDATE ON calibration_seal
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'calibration_seal is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS calibration_seal_guard_delete
+            BEFORE DELETE ON calibration_seal
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'calibration_seal is sealed');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS calibration_seal_guard_insert
+            BEFORE INSERT ON calibration_seal
+            WHEN \(permitClosed)
+            BEGIN
+                SELECT RAISE(ABORT, 'calibration_seal is sealed');
             END;
             """
         )
