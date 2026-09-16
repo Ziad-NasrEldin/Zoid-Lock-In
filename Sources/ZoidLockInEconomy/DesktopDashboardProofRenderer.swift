@@ -27,6 +27,10 @@ public enum DesktopDashboardProofRenderer: Sendable {
         screenshotsDirectory.appendingPathComponent("calibration_mode_proof.png")
     }
 
+    public static var settingsProofURL: URL {
+        screenshotsDirectory.appendingPathComponent("settings_proof.png")
+    }
+
     @MainActor
     public static func renderPNG(
         snapshot: CommandDashboardSnapshot = .proof,
@@ -78,5 +82,9 @@ public enum DesktopDashboardProofRenderer: Sendable {
     ) throws {
         try renderPNG(snapshot: .hardLockProof, to: defaultProofURL, scale: scale)
         try renderPNG(snapshot: .proof, to: calibrationProofURL, scale: scale)
+        var settingsSnap = CommandDashboardSnapshot.proof
+        settingsSnap.selectedTab = .settings
+        settingsSnap.security = .unlockedProof
+        try renderPNG(snapshot: settingsSnap, to: settingsProofURL, scale: scale)
     }
 }
