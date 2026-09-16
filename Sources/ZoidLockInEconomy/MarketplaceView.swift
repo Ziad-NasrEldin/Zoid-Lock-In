@@ -1,12 +1,14 @@
 import SwiftUI
 import ZoidLockInCore
 
-/// Menu Bar extra content. Marketplace, Offline Meeting, and Micro-Habits.
+/// Menu Bar extra content. Focus, Marketplace, Offline Meeting, and Micro-Habits.
 public struct MenuBarExtraView: View {
+    public var ticker: MenuBarTickerSnapshot
     public var snapshot: MarketplaceSnapshot
     public var meeting: OfflineMeetingSnapshot
     public var habits: MicroHabitsSnapshot
     public var onPurchase: ((AmenityKind) -> Void)?
+    public var onToggleFocus: (() -> Void)?
     public var onPunchToggle: (() -> Void)?
     public var onSubmitMeeting: (() -> Void)?
     public var onAbandonMeeting: (() -> Void)?
@@ -20,8 +22,10 @@ public struct MenuBarExtraView: View {
     @State private var surface: MenuBarCompanionSurface
 
     public init(
+        ticker: MenuBarTickerSnapshot = .proof,
         snapshot: MarketplaceSnapshot,
         onPurchase: ((AmenityKind) -> Void)? = nil,
+        onToggleFocus: (() -> Void)? = nil,
         meeting: OfflineMeetingSnapshot = .idle,
         habits: MicroHabitsSnapshot = .empty,
         onPunchToggle: (() -> Void)? = nil,
@@ -33,12 +37,14 @@ public struct MenuBarExtraView: View {
         onCompleteHabit: ((UUID) -> Void)? = nil,
         onCreateHabit: ((String, Double, Int) -> Void)? = nil,
         onOpenDashboard: (() -> Void)? = nil,
-        initialSurface: MenuBarCompanionSurface = .market
+        initialSurface: MenuBarCompanionSurface = .focus
     ) {
+        self.ticker = ticker
         self.snapshot = snapshot
         self.meeting = meeting
         self.habits = habits
         self.onPurchase = onPurchase
+        self.onToggleFocus = onToggleFocus
         self.onPunchToggle = onPunchToggle
         self.onSubmitMeeting = onSubmitMeeting
         self.onAbandonMeeting = onAbandonMeeting
@@ -56,7 +62,9 @@ public struct MenuBarExtraView: View {
             surfaceSwitcher
             dashboardLaunch
             Group {
-                if surface == .market {
+                if surface == .focus {
+                    FocusPopoverView(snapshot: ticker, onToggleFocus: onToggleFocus)
+                } else if surface == .market {
                     MarketplacePopoverView(snapshot: snapshot, onPurchase: onPurchase)
                 } else if surface == .meeting {
                     OfflineMeetingPopoverView(
@@ -110,6 +118,7 @@ public struct MenuBarExtraView: View {
 
     private var surfaceSwitcher: some View {
         HStack(spacing: 0) {
+            switcherTab("集  FOCUS", surface: .focus)
             switcherTab("市  MARKET", surface: .market)
             switcherTab("会  MEET", surface: .meeting)
             switcherTab("習  HABIT", surface: .habits)

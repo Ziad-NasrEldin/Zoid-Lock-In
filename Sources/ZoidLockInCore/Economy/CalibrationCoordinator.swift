@@ -160,7 +160,6 @@ public final class CalibrationCoordinator: @unchecked Sendable {
             timeTravel.markTampered()
         }
         guard state.bootSessionUUID == bootSessionUUID else {
-            timeTravel.markTampered()
             return
         }
         let wall = state.lastObservedWall ?? state.calibrationStartedAt
@@ -253,8 +252,6 @@ public final class CalibrationCoordinator: @unchecked Sendable {
                 existing.bootSessionUUID = bootSessionUUID
                 existing.lastObservedMonotonic = nowMono
                 existing.lastObservedWall = nowWall
-                existing.isTampered = true
-                timeTravel.markTampered()
             }
             if existing.isTampered {
                 timeTravel.markTampered()
@@ -315,8 +312,6 @@ public final class CalibrationCoordinator: @unchecked Sendable {
             next.bootSessionUUID = bootSessionUUID
             next.lastObservedMonotonic = nowMono
             next.lastObservedWall = nowWall
-            next.isTampered = true
-            timeTravel.markTampered()
             return next
         }
 

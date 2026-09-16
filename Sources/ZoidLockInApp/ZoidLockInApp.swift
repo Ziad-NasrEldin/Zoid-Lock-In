@@ -168,8 +168,10 @@ private struct MenuBarCompanionRoot: View {
 
     var body: some View {
         MenuBarExtraView(
+            ticker: session.snapshot,
             snapshot: session.marketplace,
             onPurchase: session.purchase,
+            onToggleFocus: session.toggleFocus,
             meeting: session.meeting,
             habits: session.habits,
             onPunchToggle: session.punchToggle,
@@ -573,6 +575,27 @@ final class MenuBarSession: ObservableObject {
             )
             snapshot = next
             marketplace = market
+        }
+    }
+
+    func toggleFocus() {
+        do {
+            if snapshot.focusState == .active || snapshot.focusState == .pausedGrace {
+                _ = try marketplaceCoordinator.engine.completeFocus()
+            } else {
+                _ = try marketplaceCoordinator.engine.startFocus()
+            }
+            if let next = try? marketplaceCoordinator.engine.snapshot() {
+                snapshot = next
+                marketplace = marketplaceCoordinator.assemble(
+                    ticker: next,
+                    status: nil,
+                    mobileShield: marketplace.mobileShield
+                )
+            }
+            refreshDashboard()
+        } catch {
+            _ = error
         }
     }
 

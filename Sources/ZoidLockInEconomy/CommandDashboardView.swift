@@ -569,9 +569,9 @@ public struct CommandDashboardView: View {
             labeledValue("Last alert", snapshot.security.lastAlertKind?.rawValue ?? "—")
             labeledValue("Gate", "UNLOCKED · 2FA PROTECTION ACTIVE")
             if snapshot.security.mailDispatchFailed {
-                Text("Alert mail failed. The session is recorded locally.")
-                    .font(SumiInk.body(12))
-                    .foregroundStyle(SumiInk.seal)
+                Text("Local audit mode (no Resend API key configured). The session is recorded locally.")
+                    .font(SumiInk.body(11))
+                    .foregroundStyle(SumiInk.inkMuted)
             }
             Button("LOCK SETTINGS") {
                 clearSecrets()

@@ -484,6 +484,7 @@ extension MeetingArtifactKind {
 }
 
 public enum MenuBarCompanionSurface: String, Sendable, Equatable {
+    case focus
     case market
     case meeting
     case habits
