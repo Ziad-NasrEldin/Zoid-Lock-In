@@ -15,6 +15,10 @@ public enum SumiInk: Sendable {
         .system(size: size, weight: .regular, design: .serif)
     }
 
+    public static func heading(_ size: CGFloat) -> Font {
+        .system(size: size, weight: .semibold, design: .serif)
+    }
+
     public static func body(_ size: CGFloat) -> Font {
         .system(size: size, weight: .regular, design: .serif)
     }

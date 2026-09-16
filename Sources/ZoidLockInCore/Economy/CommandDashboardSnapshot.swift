@@ -32,6 +32,9 @@ public struct CommandDashboardSnapshot: Sendable, Equatable {
     public var clockCaption: String
     public var healthCaption: String
     public var selectedTab: CommandDashboardTab
+    public var amenityPrices: [AmenityKind: Double]
+    public var blocklistRules: [BlocklistRule]
+    public var habits: [MicroHabitRowSnapshot]
 
     public init(
         ticker: MenuBarTickerSnapshot,
@@ -49,7 +52,10 @@ public struct CommandDashboardSnapshot: Sendable, Equatable {
         todayFocusMinutes: Int,
         clockCaption: String,
         healthCaption: String,
-        selectedTab: CommandDashboardTab = .overview
+        selectedTab: CommandDashboardTab = .overview,
+        amenityPrices: [AmenityKind: Double] = [:],
+        blocklistRules: [BlocklistRule] = [],
+        habits: [MicroHabitRowSnapshot] = []
     ) {
         self.ticker = ticker
         self.calibration = calibration
@@ -67,6 +73,20 @@ public struct CommandDashboardSnapshot: Sendable, Equatable {
         self.clockCaption = clockCaption
         self.healthCaption = healthCaption
         self.selectedTab = selectedTab
+        self.amenityPrices = amenityPrices
+        self.blocklistRules = blocklistRules
+        self.habits = habits
+    }
+
+    public func currentCost(for kind: AmenityKind) -> Double {
+        if let custom = amenityPrices[kind] {
+            return CreditMath.normalize(custom)
+        }
+        return AmenityCatalog.standard.intrinsicCost(of: kind)
+    }
+
+    public func isPriceOverridden(for kind: AmenityKind) -> Bool {
+        amenityPrices[kind] != nil
     }
 
     public var bannerCaption: String {
@@ -104,7 +124,10 @@ public struct CommandDashboardSnapshot: Sendable, Equatable {
         ledgerPageSize: Int = TransactionLedgerQuery.defaultPageSize,
         selectedTab: CommandDashboardTab = .overview,
         clockCaption: String? = nil,
-        healthCaption: String? = nil
+        healthCaption: String? = nil,
+        amenityPrices: [AmenityKind: Double] = [:],
+        blocklistRules: [BlocklistRule] = [],
+        habits: [MicroHabitRowSnapshot] = []
     ) -> CommandDashboardSnapshot {
         let strikes = reconciliations.filter(\.deficitStrikeApplied)
         let page = TransactionLedgerQuery.page(
@@ -147,7 +170,10 @@ public struct CommandDashboardSnapshot: Sendable, Equatable {
             todayFocusMinutes: ticker.focusElapsedSeconds / 60,
             clockCaption: clock,
             healthCaption: health,
-            selectedTab: selectedTab
+            selectedTab: selectedTab,
+            amenityPrices: amenityPrices,
+            blocklistRules: blocklistRules,
+            habits: habits
         )
     }
 

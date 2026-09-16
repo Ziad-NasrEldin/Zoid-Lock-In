@@ -8,6 +8,7 @@ public enum SecurityGatekeeperError: Error, Equatable, Sendable {
     case notEnrolled
     case alreadyEnrolled
     case notUnlocked
+    case invalidRecipient
 }
 
 extension SecurityGatekeeperError: LocalizedError {
@@ -27,6 +28,8 @@ extension SecurityGatekeeperError: LocalizedError {
             return "Admin credentials are already enrolled."
         case .notUnlocked:
             return "Settings are locked. Authenticate with password and TOTP."
+        case .invalidRecipient:
+            return "Please enter a valid alert recipient email address."
         }
     }
 }
@@ -425,6 +428,27 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             unlockedAt = nil
             lastError = nil
         }
+    }
+
+    @discardableResult
+    public func updateAlertRecipient(_ email: String) throws -> String {
+        try requireUnlocked()
+        let trimmed = email.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.contains("@"), trimmed.count >= 5 else {
+            rememberError(SecurityGatekeeperError.invalidRecipient.localizedDescription)
+            throw SecurityGatekeeperError.invalidRecipient
+        }
+        try keychain.setData(
+            Data(trimmed.utf8),
+            service: service,
+            account: ZoidLockInKeychain.alertRecipientAccount
+        )
+        withMutex {
+            cachedAlertRecipient = trimmed
+            lastError = nil
+        }
+        noteConfigurationMutation(detail: "Alert recipient updated to \(trimmed)")
+        return trimmed
     }
 
     public func requireUnlocked() throws {

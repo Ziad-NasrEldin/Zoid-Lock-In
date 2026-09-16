@@ -216,6 +216,21 @@ private struct CommandDashboardContainer: View {
                 Task {
                     await session.triggerEmergencyValve()
                 }
+            },
+            onUpdateAmenityPrice: { kind, cost in
+                session.updateAmenityPrice(kind: kind, cost: cost)
+            },
+            onAddBlocklistRule: { domain in
+                session.addBlocklistRule(domain: domain)
+            },
+            onRemoveBlocklistRule: { domain in
+                session.removeBlocklistRule(domain: domain)
+            },
+            onUpdateAlertRecipient: { email in
+                session.updateAlertRecipient(email: email)
+            },
+            onCreateHabit: { title, reward, freq in
+                session.createHabit(title, reward: reward, frequency: freq)
             }
         )
         .onAppear {
@@ -382,7 +397,8 @@ final class MenuBarSession: ObservableObject {
         self.snapshot = initial
         self.marketplace = MarketplaceSnapshot.assemble(ticker: initial)
         self.meeting = meetings.snapshot()
-        self.habits = habitCoordinator.snapshot(ticker: initial)
+        let initialHabits = habitCoordinator.snapshot(ticker: initial)
+        self.habits = initialHabits
         let initialVault = (try? resolved.loadVault()) ?? .empty
         let initialReconciliations = (try? resolved.allReconciliations()) ?? []
         let initialTransactions = (try? resolved.allTransactions()) ?? []
@@ -400,7 +416,10 @@ final class MenuBarSession: ObservableObject {
             reconciliations: initialReconciliations,
             transactions: initialTransactions,
             security: gatekeeper.snapshot(),
-            governance: habitGovernance.snapshot()
+            governance: habitGovernance.snapshot(),
+            amenityPrices: (try? habitGovernance.amenityPriceOverrides()) ?? [:],
+            blocklistRules: (try? habitGovernance.blocklistRules()) ?? [],
+            habits: initialHabits.habits
         )
         lastPublishedMode = nil
         Task {
@@ -486,7 +505,10 @@ final class MenuBarSession: ObservableObject {
                     security: gatekeeper.snapshot(),
                     governance: habitGovernance.snapshot(),
                     emergencyDebtCredits: cache.unleviedIncidents().reduce(0) { $0 + $1.signedDebtCredits },
-                    emergencyValveActive: status?.activePasses.contains { $0.kind == .emergency } == true
+                    emergencyValveActive: status?.activePasses.contains { $0.kind == .emergency } == true,
+                    amenityPrices: (try? habitGovernance.amenityPriceOverrides()) ?? [:],
+                    blocklistRules: (try? habitGovernance.blocklistRules()) ?? [],
+                    habits: habitSnap.habits
                 )
                 self.snapshot = next
                 self.marketplace = market
@@ -528,6 +550,48 @@ final class MenuBarSession: ObservableObject {
         refreshDashboard()
     }
 
+    func updateAmenityPrice(kind: AmenityKind, cost: Double) {
+        do {
+            _ = try habitGovernance.setAmenityPrice(kind, cost: cost)
+            let next = (try? marketplaceCoordinator.engine.snapshot()) ?? snapshot
+            marketplace = marketplaceCoordinator.assemble(
+                ticker: next,
+                status: nil,
+                mobileShield: marketplace.mobileShield
+            )
+        } catch {
+            _ = error
+        }
+        refreshDashboard()
+    }
+
+    func addBlocklistRule(domain: String) {
+        do {
+            _ = try habitGovernance.addBlocklistSuffix(domain)
+        } catch {
+            _ = error
+        }
+        refreshDashboard()
+    }
+
+    func removeBlocklistRule(domain: String) {
+        do {
+            try habitGovernance.removeBlocklistSuffix(domain)
+        } catch {
+            _ = error
+        }
+        refreshDashboard()
+    }
+
+    func updateAlertRecipient(email: String) {
+        do {
+            _ = try gatekeeper.updateAlertRecipient(email)
+        } catch {
+            _ = error
+        }
+        refreshDashboard()
+    }
+
     private func publishCalibrationModeIfNeeded(_ mode: EnforcementMode) {
         if lastPublishedMode == mode {
             return
@@ -557,7 +621,10 @@ final class MenuBarSession: ObservableObject {
             security: gatekeeper.snapshot(),
             governance: habitGovernance.snapshot(),
             emergencyDebtCredits: incidentCache.unleviedIncidents().reduce(0) { $0 + $1.signedDebtCredits },
-            emergencyValveActive: marketplace.mobileShield.passActive
+            emergencyValveActive: marketplace.mobileShield.passActive,
+            amenityPrices: (try? habitGovernance.amenityPriceOverrides()) ?? [:],
+            blocklistRules: (try? habitGovernance.blocklistRules()) ?? [],
+            habits: habits.habits
         )
     }
 

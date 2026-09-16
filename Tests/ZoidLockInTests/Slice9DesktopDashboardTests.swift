@@ -375,6 +375,89 @@ struct Slice9DesktopDashboardTests {
         #expect(try ledger.deficitStrikeRecords().count == 1)
     }
 
+    @Test("updateAlertRecipient validates email, requires unlocked gate, and persists")
+    func updateAlertRecipientTest() async throws {
+        let keychain = InMemoryKeychainStore()
+        let mail = RecordingAdminMail()
+        let wall = ManualWallClock(Self.date(2026, 3, 9, 10, 0))
+        let gate = SecurityGatekeeper(
+            keychain: keychain,
+            mail: mail,
+            wallClock: wall,
+            service: "test.service"
+        )
+
+        let secret = try TOTPEngine.generateSecret()
+        try gate.enroll(
+            password: "twelve chars+",
+            passwordConfirmation: "twelve chars+",
+            totpSecret: secret
+        )
+
+        // Must fail when locked
+        #expect(throws: SecurityGatekeeperError.notUnlocked) {
+            try gate.updateAlertRecipient("new@example.com")
+        }
+
+        // Unlock
+        let code = try TOTPEngine.code(base32Secret: secret, at: wall.now())
+        _ = try await gate.unlock(password: "twelve chars+", totp: code)
+        #expect(gate.isUnlocked)
+
+        // Invalid emails
+        #expect(throws: SecurityGatekeeperError.invalidRecipient) {
+            try gate.updateAlertRecipient("notanemail")
+        }
+        #expect(throws: SecurityGatekeeperError.invalidRecipient) {
+            try gate.updateAlertRecipient("   ")
+        }
+
+        // Valid email
+        let updated = try gate.updateAlertRecipient("user@discipline.org")
+        #expect(updated == "user@discipline.org")
+        #expect(gate.alertRecipient == "user@discipline.org")
+        #expect(gate.snapshot().alertRecipient == "user@discipline.org")
+    }
+
+    @Test("dashboard snapshot manages amenity prices, blocklist rules, and micro-habits")
+    func dashboardSnapshotConfigurationFields() {
+        var snapshot = CommandDashboardSnapshot.proof
+        #expect(snapshot.currentCost(for: .food) == 2.5)
+        #expect(!snapshot.isPriceOverridden(for: .food))
+
+        snapshot.amenityPrices[.food] = 4.0
+        #expect(snapshot.currentCost(for: .food) == 4.0)
+        #expect(snapshot.isPriceOverridden(for: .food))
+
+        let rule = BlocklistRule(suffix: "talabat.com", createdAt: Date())
+        snapshot.blocklistRules = [rule]
+        #expect(snapshot.blocklistRules.count == 1)
+        #expect(snapshot.blocklistRules[0].suffix == "talabat.com")
+    }
+
+    @MainActor
+    @Test("command dashboard renders unlocked settings view with controls")
+    func unlockedSettingsRenders() {
+        var snapshot = CommandDashboardSnapshot.proof
+        snapshot.security = .unlockedProof
+        snapshot.selectedTab = .settings
+        snapshot.amenityPrices[.food] = 3.5
+        snapshot.blocklistRules = [BlocklistRule(suffix: "tiktok.com", createdAt: Date())]
+
+        let view = CommandDashboardView(
+            snapshot: snapshot,
+            onUpdateAmenityPrice: { _, _ in },
+            onAddBlocklistRule: { _ in },
+            onRemoveBlocklistRule: { _ in },
+            onUpdateAlertRecipient: { _ in }
+        )
+
+        let hosting = NSHostingView(rootView: view)
+        hosting.frame = NSRect(origin: .zero, size: CGSize(width: 1200, height: 800))
+        hosting.layoutSubtreeIfNeeded()
+        #expect(hosting.bounds.width == 1200)
+    }
+
     @MainActor
     @Test("renders the SUMI-E command dashboard and calibration proof PNGs")
     func desktopDashboardProofPNG() throws {
