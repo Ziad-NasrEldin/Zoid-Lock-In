@@ -260,7 +260,7 @@ final class MenuBarSession: ObservableObject {
         let fallbackDirectory = resolved.fileURL?.deletingLastPathComponent()
             ?? EncryptedStateStore.defaultApplicationSupportDirectory()
         let gatekeeper = SecurityGatekeeper(
-            keychain: ZoidLockInKeychain(),
+            keychain: FileSecureDataStore.shared,
             mail: AlertMailService(
                 configuration: AlertMailConfiguration(recipient: SecurityGatekeeper.defaultRecipient)
             )

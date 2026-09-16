@@ -69,24 +69,20 @@ public protocol SecretProviding: Sendable {
     func secret(service: String, account: String) -> String?
 }
 
-/// Reads a generic password from the macOS Keychain.
+/// Reads a secret from the protected secure data store.
 public struct KeychainSecretProvider: SecretProviding {
-    public init() {}
+    private let store: any KeychainDataStoring
+
+    public init(store: any KeychainDataStoring = FileSecureDataStore.shared) {
+        self.store = store
+    }
 
     public func secret(service: String, account: String) -> String? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne,
-        ]
-        var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
-        guard status == errSecSuccess, let data = item as? Data else {
-            return nil
+        if let data = store.data(service: service, account: account),
+           let key = String(data: data, encoding: .utf8) {
+            return key
         }
-        return String(data: data, encoding: .utf8)
+        return nil
     }
 }
 

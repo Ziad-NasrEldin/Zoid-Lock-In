@@ -107,7 +107,7 @@ public enum MobileShieldSecrets: Sendable {
             throw EncryptedStateStoreError.unauthenticatedKey
         }
         let key = SymmetricKey(data: data)
-        if isPublicTeamIdentifierKDF(key) {
+        if isPublicTeamIdentifierKDF(key) || isPublicTeamIdentifierKDF(key, teamID: ZoidLockInIdentity.teamIdentifierPlaceholder) {
             throw EncryptedStateStoreError.unauthenticatedKey
         }
         return key
@@ -136,7 +136,7 @@ public struct InMemoryMobileShieldKeyProvider: MobileShieldKeyProviding, Sendabl
     }
 
     public func loadOrCreate() throws -> SymmetricKey {
-        if MobileShieldSecrets.isPublicTeamIdentifierKDF(key) {
+        if MobileShieldSecrets.isPublicTeamIdentifierKDF(key) || MobileShieldSecrets.isPublicTeamIdentifierKDF(key, teamID: ZoidLockInIdentity.teamIdentifierPlaceholder) {
             throw EncryptedStateStoreError.unauthenticatedKey
         }
         let bytes = MobileShieldSecrets.rawBytes(of: key)
@@ -155,7 +155,7 @@ public struct KeychainMobileShieldKeyProvider: MobileShieldKeyProviding, Sendabl
     public var account: String
 
     public init(
-        store: any KeychainDataStoring = ZoidLockInKeychain(),
+        store: any KeychainDataStoring = FileSecureDataStore.shared,
         service: String = ZoidLockInKeychain.mobileShieldService,
         account: String = ZoidLockInKeychain.mobileShieldKeyAccount
     ) {
@@ -205,7 +205,7 @@ public struct KeychainSequenceHighWater: SequenceHighWaterMarking, Sendable {
     public var account: String
 
     public init(
-        store: any KeychainDataStoring = ZoidLockInKeychain(),
+        store: any KeychainDataStoring = FileSecureDataStore.shared,
         service: String = ZoidLockInKeychain.mobileShieldService,
         account: String = ZoidLockInKeychain.mobileShieldHighWaterAccount
     ) {

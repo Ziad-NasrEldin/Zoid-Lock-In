@@ -48,7 +48,7 @@ public enum GovernanceSecrets: Sendable {
             throw GovernanceLockError.integrityFailed
         }
         let key = SymmetricKey(data: data)
-        if isPublicTeamIdentifierKDF(key) {
+        if isPublicTeamIdentifierKDF(key) || isPublicTeamIdentifierKDF(key, teamID: ZoidLockInIdentity.teamIdentifierPlaceholder) {
             throw GovernanceLockError.integrityFailed
         }
         return key
@@ -79,7 +79,7 @@ public struct KeychainGovernanceKeyProvider: GovernanceKeyProviding, Sendable {
     public var account: String
 
     public init(
-        store: any KeychainDataStoring = ZoidLockInKeychain(),
+        store: any KeychainDataStoring = FileSecureDataStore.shared,
         service: String = ZoidLockInKeychain.governanceService,
         account: String = ZoidLockInKeychain.governanceKeyAccount
     ) {
@@ -243,7 +243,7 @@ public final class FileGovernanceSealStore: GovernanceSealPersisting, @unchecked
     public init(
         privilegedFileURL: URL = GovernanceSealLocation.privilegedFileURL,
         fallbackDirectory: URL,
-        keychainStore: any KeychainDataStoring = ZoidLockInKeychain(),
+        keychainStore: any KeychainDataStoring = FileSecureDataStore.shared,
         keychainService: String = ZoidLockInKeychain.governanceService,
         keychainSealAccount: String = ZoidLockInKeychain.governanceSealAccount,
         fileManager: FileManager = .default

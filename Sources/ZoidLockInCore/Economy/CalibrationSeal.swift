@@ -48,7 +48,7 @@ public enum CalibrationSecrets: Sendable {
             throw CalibrationError.integrityFailed
         }
         let key = SymmetricKey(data: data)
-        if isPublicTeamIdentifierKDF(key) {
+        if isPublicTeamIdentifierKDF(key) || isPublicTeamIdentifierKDF(key, teamID: ZoidLockInIdentity.teamIdentifierPlaceholder) {
             throw CalibrationError.integrityFailed
         }
         return key
@@ -81,7 +81,7 @@ public struct KeychainCalibrationKeyProvider: CalibrationKeyProviding, Sendable 
     public var account: String
 
     public init(
-        store: any KeychainDataStoring = ZoidLockInKeychain(),
+        store: any KeychainDataStoring = FileSecureDataStore.shared,
         service: String = ZoidLockInKeychain.calibrationService,
         account: String = ZoidLockInKeychain.calibrationKeyAccount
     ) {
@@ -244,7 +244,7 @@ public final class FileCalibrationSealStore: CalibrationSealPersisting, @uncheck
     public init(
         privilegedFileURL: URL = CalibrationSealLocation.privilegedFileURL,
         fallbackDirectory: URL,
-        keychainStore: any KeychainDataStoring = ZoidLockInKeychain(),
+        keychainStore: any KeychainDataStoring = FileSecureDataStore.shared,
         keychainService: String = ZoidLockInKeychain.calibrationService,
         keychainSealAccount: String = ZoidLockInKeychain.calibrationSealAccount,
         fileManager: FileManager = .default

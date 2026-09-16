@@ -151,3 +151,72 @@ public final class InMemoryKeychainStore: KeychainDataStoring, @unchecked Sendab
         "\(service)\u{1F}\(account)"
     }
 }
+
+/// File-backed secure data store. Stores secrets in isolated user Application Support
+/// with restricted 0700/0600 POSIX permissions, completely decoupled from macOS Keychain.
+public final class FileSecureDataStore: KeychainDataStoring, @unchecked Sendable {
+    public static let shared = FileSecureDataStore()
+    public static let defaultFolderName = "secure_store"
+
+    public let baseURL: URL
+    private let fileManager: FileManager
+    private let lock = NSLock()
+
+    public init(baseURL: URL? = nil, fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+        if let baseURL {
+            self.baseURL = baseURL
+        } else {
+            let appSupport = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+                ?? URL(fileURLWithPath: NSTemporaryDirectory())
+            self.baseURL = appSupport
+                .appendingPathComponent("ZoidLockIn", isDirectory: true)
+                .appendingPathComponent(Self.defaultFolderName, isDirectory: true)
+        }
+        ensureBaseDirectory()
+    }
+
+    private func ensureBaseDirectory() {
+        try? fileManager.createDirectory(at: baseURL, withIntermediateDirectories: true)
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: baseURL.path)
+    }
+
+    private func itemURL(service: String, account: String) -> URL {
+        let safeService = sanitize(service)
+        let safeAccount = sanitize(account)
+        let dir = baseURL.appendingPathComponent(safeService, isDirectory: true)
+        try? fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        try? fileManager.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        return dir.appendingPathComponent("\(safeAccount).dat")
+    }
+
+    private func sanitize(_ name: String) -> String {
+        name.replacingOccurrences(of: "/", with: "_")
+    }
+
+    public func data(service: String, account: String) -> Data? {
+        lock.lock()
+        defer { lock.unlock() }
+        let url = itemURL(service: service, account: account)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+
+    public func setData(_ data: Data, service: String, account: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let url = itemURL(service: service, account: account)
+        try data.write(to: url, options: .atomic)
+        try? fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+    }
+
+    public func delete(service: String, account: String) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        let url = itemURL(service: service, account: account)
+        if fileManager.fileExists(atPath: url.path) {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+}
+
