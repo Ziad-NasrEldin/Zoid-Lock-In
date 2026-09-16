@@ -150,6 +150,7 @@ public struct SecuritySettingsSnapshot: Sendable, Equatable {
 /// Production must inject a real `KeychainDataStoring` — there is no in-memory default.
 public final class SecurityGatekeeper: @unchecked Sendable {
     public static let minimumPasswordLength = PasswordHasher.minimumLength
+    public static let sessionTimeoutSeconds: TimeInterval = 600
     public static let defaultRecipient = "founder@mavoid.com"
 
     public let keychain: any KeychainDataStoring
@@ -159,6 +160,7 @@ public final class SecurityGatekeeper: @unchecked Sendable {
 
     private let mutex = NSLock()
     private var unlocked = false
+    private var unlockedAt: Date?
     private var lastError: String?
     private var lastAlertKind: AdminAlertKind?
     private var replay = TOTPReplayWindow()
@@ -184,7 +186,20 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     }
 
     public var isUnlocked: Bool {
-        withMutex { unlocked }
+        withMutex { isUnlockedLocked() }
+    }
+
+    private func isUnlockedLocked() -> Bool {
+        guard unlocked else { return false }
+        if let unlockedAt {
+            let elapsed = wallClock.now().timeIntervalSince(unlockedAt)
+            if elapsed >= Self.sessionTimeoutSeconds {
+                unlocked = false
+                self.unlockedAt = nil
+                return false
+            }
+        }
+        return true
     }
 
     public var isEnrolled: Bool {
@@ -245,7 +260,7 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             let failed = auditEvents.last.map { !$0.emailDispatched } ?? false
             return SecuritySettingsSnapshot(
                 isEnrolled: enrolled,
-                isUnlocked: unlocked,
+                isUnlocked: isUnlockedLocked(),
                 alertRecipient: recipient,
                 unlockError: lastError,
                 lastAlertKind: lastAlertKind,
@@ -407,6 +422,7 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     public func lockSettings() {
         withMutex {
             unlocked = false
+            unlockedAt = nil
             lastError = nil
         }
     }
@@ -426,12 +442,15 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             base32Secret: secret,
             at: moment
         ) else {
+            rememberError(SecurityGatekeeperError.totpMismatch.localizedDescription)
             throw SecurityGatekeeperError.totpMismatch
         }
-        let accepted = withMutex { replay.consume(window) }
-        guard accepted else {
+        if let last = replay.lastUsedTOTPWindow, window <= last {
+            rememberError(SecurityGatekeeperError.totpMismatch.localizedDescription)
             throw SecurityGatekeeperError.totpMismatch
         }
+        replay.lastUsedTOTPWindow = window
+        persistReplayWindow(window)
         return window
     }
 
@@ -479,6 +498,7 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     private func markUnlocked(alertKind: AdminAlertKind) {
         withMutex {
             unlocked = true
+            unlockedAt = wallClock.now()
             lastError = nil
             lastAlertKind = alertKind
         }

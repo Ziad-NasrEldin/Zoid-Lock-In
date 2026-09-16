@@ -8,20 +8,30 @@ APP_BUNDLE="${BUILD_DIR}/${APP_NAME}.app"
 CONTENTS_DIR="${APP_BUNDLE}/Contents"
 MACOS_DIR="${CONTENTS_DIR}/MacOS"
 RESOURCES_DIR="${CONTENTS_DIR}/Resources"
+LAUNCH_DAEMONS_DIR="${CONTENTS_DIR}/Library/LaunchDaemons"
 
-echo "==> Building ZoidLockInApp in release mode..."
+echo "==> Building ZoidLockInApp and ZoidLockInDaemon in release mode..."
 cd "${REPO_DIR}"
 swift build -c release --product ZoidLockInApp
+swift build -c release --product ZoidLockInDaemon
 
-BIN_PATH="$(swift build -c release --show-bin-path)/ZoidLockInApp"
+BIN_DIR="$(swift build -c release --show-bin-path)"
+BIN_PATH="${BIN_DIR}/ZoidLockInApp"
+DAEMON_BIN_PATH="${BIN_DIR}/ZoidLockInDaemon"
 
 echo "==> Packaging ${APP_BUNDLE}..."
 rm -rf "${APP_BUNDLE}"
-mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}"
+mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${LAUNCH_DAEMONS_DIR}"
 
-# Copy compiled executable
+# Copy compiled executables
 cp "${BIN_PATH}" "${MACOS_DIR}/ZoidLockInApp"
 chmod +x "${MACOS_DIR}/ZoidLockInApp"
+
+cp "${DAEMON_BIN_PATH}" "${MACOS_DIR}/ZoidLockInDaemon"
+chmod +x "${MACOS_DIR}/ZoidLockInDaemon"
+
+# Copy LaunchDaemon plist for SMAppService.daemon
+cp "${REPO_DIR}/Resources/com.mavoid.zoidlockin.helper.plist" "${LAUNCH_DAEMONS_DIR}/com.mavoid.zoidlockin.helper.plist"
 
 # Copy Info.plist
 cp "${REPO_DIR}/Resources/App-Info.plist" "${CONTENTS_DIR}/Info.plist"

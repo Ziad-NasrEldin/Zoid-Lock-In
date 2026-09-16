@@ -22,6 +22,29 @@ public enum PasswordHasher: Sendable {
         }
     }
 
+    /// Evaluates password complexity according to PRODUCT.md §6.1:
+    /// minimum 12 chars with uppercase, lowercase, numbers, and symbols.
+    public static func validateComplexity(_ password: String) -> (isValid: Bool, missing: [String]) {
+        var missing: [String] = []
+        if password.count < minimumLength {
+            missing.append("At least \(minimumLength) characters")
+        }
+        if !password.contains(where: { $0.isUppercase }) {
+            missing.append("Uppercase letter")
+        }
+        if !password.contains(where: { $0.isLowercase }) {
+            missing.append("Lowercase letter")
+        }
+        if !password.contains(where: { $0.isNumber }) {
+            missing.append("Number")
+        }
+        let symbols = CharacterSet.punctuationCharacters.union(.symbols)
+        if password.unicodeScalars.first(where: { symbols.contains($0) }) == nil {
+            missing.append("Symbol")
+        }
+        return (missing.isEmpty, missing)
+    }
+
     public static func hash(
         _ password: String,
         iterations: Int = defaultIterations

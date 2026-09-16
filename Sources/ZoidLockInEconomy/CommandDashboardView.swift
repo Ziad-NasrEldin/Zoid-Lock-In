@@ -508,11 +508,17 @@ public struct CommandDashboardView: View {
                 .font(SumiInk.body(13))
                 .foregroundStyle(SumiInk.inkMuted)
                 .fixedSize(horizontal: false, vertical: true)
-            SecureField("Password (12+ characters)", text: $password)
+            SecureField("Password (12+ characters, upper/lower/number/symbol)", text: $password)
                 .textFieldStyle(.plain)
                 .font(SumiInk.body(14))
                 .padding(10)
                 .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+            let complexity = PasswordHasher.validateComplexity(password)
+            if !password.isEmpty && !complexity.isValid {
+                Text("Requires: " + complexity.missing.joined(separator: ", "))
+                    .font(SumiInk.caption(10))
+                    .foregroundStyle(SumiInk.seal)
+            }
             SecureField("Confirm password", text: $confirmPassword)
                 .textFieldStyle(.plain)
                 .font(SumiInk.body(14))
@@ -554,7 +560,7 @@ public struct CommandDashboardView: View {
             }
             .buttonStyle(SumiInkSealButton())
             .disabled(
-                password.count < SecurityGatekeeper.minimumPasswordLength
+                !PasswordHasher.validateComplexity(password).isValid
                     || confirmPassword != password
                     || totp.count < 6
                     || enrollSecret.isEmpty
