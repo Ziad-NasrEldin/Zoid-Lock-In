@@ -211,6 +211,11 @@ private struct CommandDashboardContainer: View {
                         totp: totp
                     )
                 }
+            },
+            onTriggerEmergencyValve: {
+                Task {
+                    await session.triggerEmergencyValve()
+                }
             }
         )
         .onAppear {
@@ -341,6 +346,12 @@ final class MenuBarSession: ObservableObject {
             timeZone: pinnedTimeZone
         )
         habitGovernance.publishLiveSettings()
+        if let existing = try? resolved.allHabits(), existing.isEmpty {
+            let now = Date()
+            for starter in MicroHabit.defaultCatalog(now: now) {
+                try? resolved.upsertHabit(starter)
+            }
+        }
         let auditor = OfflineMeetingAuditCoordinator(
             store: resolved,
             artifacts: artifactStore,
@@ -718,6 +729,15 @@ final class MenuBarSession: ObservableObject {
             habits = habitCoordinator.snapshot(ticker: snapshot)
         }
         refreshDashboard()
+    }
+
+    func triggerEmergencyValve() async {
+        do {
+            try await client.engageEmergencySafetyValve()
+            refreshDashboard()
+        } catch {
+            _ = error
+        }
     }
 
     deinit {

@@ -967,13 +967,20 @@ public final class ExchangeEngine: @unchecked Sendable {
             stateCaption = "Idle"
         }
 
+        let todayDayKey = civilClock.dayKey(now)
+        let todayMints = (try? ledger.transactions(onLocalDay: todayDayKey, clock: civilClock))?
+            .filter { $0.transactionType == .mint }
+            .reduce(0.0) { $0 + $1.amount } ?? 0.0
+        let cumulativeFocusCredits = CreditMath.normalize(todayMints)
+        let focusCreditsToday = max(session?.creditsEarned ?? 0, cumulativeFocusCredits)
+
         return MenuBarTickerSnapshot(
             walletBalance: balance,
             spendableBalance: CreditMath.spendable(balance),
             focusState: session?.state,
             focusElapsedSeconds: elapsed,
             focusRemainingToNextMintSeconds: remaining,
-            focusCreditsEarned: session?.creditsEarned ?? 0,
+            focusCreditsEarned: focusCreditsToday,
             multiplierApplied: session?.multiplierApplied ?? FocusMinting.standardMultiplier,
             currentStreak: vault.currentStreak,
             highestStreak: vault.highestStreak,

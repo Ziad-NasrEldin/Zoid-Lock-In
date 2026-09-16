@@ -86,6 +86,7 @@ let package = Package(
                 .linkedLibrary("sqlite3"),
                 .linkedFramework("SwiftUI"),
                 .linkedFramework("AppKit"),
+                .linkedFramework("ServiceManagement"),
             ]
         ),
         .executableTarget(

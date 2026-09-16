@@ -27,6 +27,44 @@ public struct MicroHabit: Sendable, Equatable, Identifiable {
         self.createdAt = createdAt
         self.updatedAt = updatedAt
     }
+
+    /// Default starter catalog representing baseline discipline per PRODUCT.md §2.4.
+    public static func defaultCatalog(now: Date = Date()) -> [MicroHabit] {
+        [
+            MicroHabit(
+                title: "Brushing Teeth / Dental Routine",
+                rewardCredits: 0.25,
+                dailyFrequencyLimit: 2,
+                isEnabled: true,
+                createdAt: now,
+                updatedAt: now
+            ),
+            MicroHabit(
+                title: "Making Bed / Room Reset",
+                rewardCredits: 0.25,
+                dailyFrequencyLimit: 1,
+                isEnabled: true,
+                createdAt: now.addingTimeInterval(1),
+                updatedAt: now.addingTimeInterval(1)
+            ),
+            MicroHabit(
+                title: "Daily Hydration Goal (2L Water)",
+                rewardCredits: 0.25,
+                dailyFrequencyLimit: 1,
+                isEnabled: true,
+                createdAt: now.addingTimeInterval(2),
+                updatedAt: now.addingTimeInterval(2)
+            ),
+            MicroHabit(
+                title: "Physical Movement / Stretching (15m)",
+                rewardCredits: 0.50,
+                dailyFrequencyLimit: 1,
+                isEnabled: true,
+                createdAt: now.addingTimeInterval(3),
+                updatedAt: now.addingTimeInterval(3)
+            ),
+        ]
+    }
 }
 
 /// One civil-day completion bound to the wallet via `habit:<completionID>`.

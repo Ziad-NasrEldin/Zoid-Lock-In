@@ -1,3 +1,4 @@
+import ServiceManagement
 import SwiftUI
 import ZoidLockInCore
 
@@ -7,6 +8,7 @@ public struct CommandDashboardView: View {
     public var onUnlock: ((String, String) -> Void)?
     public var onLock: (() -> Void)?
     public var onEnroll: ((String, String, String, String) -> Void)?
+    public var onTriggerEmergencyValve: (() -> Void)?
 
     @State private var tab: CommandDashboardTab
     @State private var filter: LedgerAuditKind
@@ -18,17 +20,20 @@ public struct CommandDashboardView: View {
     @State private var totp: String
     @State private var enrollSecret: String
     @State private var jumpPage: String
+    @State private var showingEmergencyConfirmation: Bool = false
 
     public init(
         snapshot: CommandDashboardSnapshot,
         onUnlock: ((String, String) -> Void)? = nil,
         onLock: (() -> Void)? = nil,
-        onEnroll: ((String, String, String, String) -> Void)? = nil
+        onEnroll: ((String, String, String, String) -> Void)? = nil,
+        onTriggerEmergencyValve: (() -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.onUnlock = onUnlock
         self.onLock = onLock
         self.onEnroll = onEnroll
+        self.onTriggerEmergencyValve = onTriggerEmergencyValve
         _tab = State(initialValue: snapshot.selectedTab)
         _filter = State(initialValue: snapshot.ledgerPage.filter)
         _search = State(initialValue: snapshot.ledgerPage.search)
@@ -448,6 +453,7 @@ public struct CommandDashboardView: View {
             VStack(alignment: .leading, spacing: 16) {
                 governanceCard
                 emergencyCard
+                sentinelCard
             }
             .frame(width: 360)
         }
@@ -620,6 +626,79 @@ public struct CommandDashboardView: View {
             Text("Pending debt  \(snapshot.formattedEmergencyDebt)")
                 .font(SumiInk.body(13))
                 .foregroundStyle(SumiInk.inkMuted)
+            if snapshot.emergencyValveActive {
+                Text("EMERGENCY OVERRIDE ENGAGED (30m release active)")
+                    .font(SumiInk.caption(10))
+                    .tracking(1.4)
+                    .foregroundStyle(SumiInk.seal)
+            } else {
+                Button("ENGAGE EMERGENCY VALVE (30m)") {
+                    showingEmergencyConfirmation = true
+                }
+                .buttonStyle(SumiInkGhostButton())
+                .alert("Confirm Emergency Override", isPresented: $showingEmergencyConfirmation) {
+                    Button("ENGAGE (−2.0c DEBT)", role: .destructive) {
+                        onTriggerEmergencyValve?()
+                    }
+                    Button("CANCEL", role: .cancel) {}
+                } message: {
+                    Text(EmergencySafetyValveEngine.confirmationPromptText)
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+    }
+
+    private var sentinelStatus: SMAppService.Status {
+        SMAppService.daemon(plistName: "com.mavoid.zoidlockin.helper.plist").status
+    }
+
+    private var sentinelStatusCaption: String {
+        switch sentinelStatus {
+        case .enabled:
+            return "ENABLED · ROOT SENTINEL"
+        case .requiresApproval:
+            return "APPROVAL REQUIRED IN SYSTEM SETTINGS"
+        case .notRegistered:
+            return "NOT REGISTERED"
+        case .notFound:
+            return "BUNDLE HELPER NOT FOUND"
+        @unknown default:
+            return "UNKNOWN"
+        }
+    }
+
+    private var sentinelCard: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("SENTINEL DAEMON")
+                    .font(SumiInk.caption(10))
+                    .tracking(1.8)
+                    .foregroundStyle(SumiInk.inkMuted)
+                Spacer()
+                Text(sentinelStatusCaption)
+                    .font(SumiInk.caption(9))
+                    .tracking(1.2)
+                    .foregroundStyle(sentinelStatus == .enabled ? SumiInk.ink : SumiInk.seal)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(sentinelStatus == .enabled ? SumiInk.paperSoft : SumiInk.sealWash)
+            }
+            Text("Hard lockdown privileged sentinel supervising unauthorized gaming executables and network socket filters.")
+                .font(SumiInk.body(12))
+                .foregroundStyle(SumiInk.inkMuted)
+            if sentinelStatus != .enabled {
+                Button("REGISTER SENTINEL DAEMON") {
+                    try? SMAppService.daemon(plistName: "com.mavoid.zoidlockin.helper.plist").register()
+                }
+                .buttonStyle(SumiInkGhostButton())
+            } else {
+                Text("Daemon actively supervised by macOS launchd.")
+                    .font(SumiInk.caption(10))
+                    .foregroundStyle(SumiInk.inkMuted)
+            }
         }
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
