@@ -70,6 +70,46 @@ struct EconomicLedgerTests {
         #expect(try ledger.allTransactions().count == 1)
     }
 
+    @Test("admin_audit_events persist across reopen and reject UPDATE and DELETE")
+    func adminAuditEventsAreDurableAndAppendOnly() throws {
+        let url = EconomicLedgerLocation.makeIsolatedFileURL()
+        let ledger = try SQLiteEconomicLedger(fileURL: url)
+        let recordedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        try ledger.appendAdminAudit(
+            AdminAuditRecord(
+                kind: .settingsUnlocked,
+                timestamp: recordedAt,
+                recipient: SecurityGatekeeper.defaultRecipient,
+                emailDispatched: false,
+                errorDescription: "missing API key",
+                detail: "2FA settings unlocked"
+            )
+        )
+
+        do {
+            try ledger.executeUncheckedSQL("UPDATE admin_audit_events SET email_dispatched = 1;")
+            Issue.record("UPDATE should be rejected")
+        } catch let error as EconomicLedgerError {
+            #expect(error == .appendOnly)
+        }
+
+        do {
+            try ledger.executeUncheckedSQL("DELETE FROM admin_audit_events;")
+            Issue.record("DELETE should be rejected")
+        } catch let error as EconomicLedgerError {
+            #expect(error == .appendOnly)
+        }
+
+        let reopened = try SQLiteEconomicLedger(fileURL: url)
+        let rows = try reopened.allAdminAuditEvents()
+        #expect(rows.count == 1)
+        #expect(rows[0].kind == .settingsUnlocked)
+        #expect(rows[0].emailDispatched == false)
+        #expect(rows[0].recipient == SecurityGatekeeper.defaultRecipient)
+        #expect(rows[0].errorDescription == "missing API key")
+        #expect(rows[0].detail == "2FA settings unlocked")
+    }
+
     @Test("in-memory ledger refuses rewrites")
     func inMemoryAppendOnly() throws {
         let ledger = InMemoryEconomicLedger()

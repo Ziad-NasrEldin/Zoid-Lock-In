@@ -124,6 +124,26 @@ struct AlertMailServiceTests {
         #expect(PendingDebtRecord.emergencyPenaltyCredits == -2.0)
         #expect(store.recordsPendingReconciliation()[0].reason == .emergencyPenalty)
     }
+
+    @Test("admin unlock mail uses PRODUCT §6 verbatim warning copy")
+    func adminUnlockMailUsesProductCopy() {
+        let event = AdminAlertEvent(
+            kind: .settingsUnlocked,
+            timestamp: Date(timeIntervalSince1970: 1_700_000_000),
+            recipient: "founder@mavoid.com",
+            detail: "2FA settings unlocked"
+        )
+        let payload = AlertMailService.makeAdminPayload(
+            event: event,
+            from: "Zoid Lock In <alerts@mavoid.com>"
+        )
+        #expect(payload.subject == "CRITICAL: You entered Admin Dashboard. Stand firm.")
+        #expect(payload.text.contains("CRITICAL SECURITY & INTEGRITY ALERT: You have authenticated into the Zoid 0 Trading Center Admin Settings."))
+        #expect(payload.text.contains("Do not lower prices, grant unearned credits, or negotiate with weakness."))
+        #expect(payload.text.contains("ADMIN_LOGIN"))
+        #expect(payload.text.contains("2FA settings unlocked"))
+        #expect(payload.to == ["founder@mavoid.com"])
+    }
 }
 
 private struct EmptySecrets: SecretProviding {

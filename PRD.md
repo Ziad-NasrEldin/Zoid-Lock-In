@@ -112,7 +112,7 @@ The user needs an uncompromising, local-first personal economy system that intro
 - **Storage Lifecycle:** Original image binaries are removed from disk 30 days after creation; SHA-256 digests and audit logs remain permanently in SQLite.
 
 ### 5. Multi-Factor Admin Governance & Anti-Cheating
-- **Password Engine:** Argon2id password hashing with random salt stored in macOS Keychain.
+- **Password Engine:** PBKDF2-HMAC-SHA256 password hashing with random salt stored in macOS Keychain.
 - **TOTP Engine:** Standard RFC 6238 TOTP algorithm verified against a shared base32 secret generated on initial onboarding.
 - **Transactional Alert Dispatcher:** Dispatches HTTP POST requests to the Resend API with an email alerting the user whenever an authenticated admin session is opened or emergency override is engaged.
 - **48-Hour Cooldown Controller:** Records `lastConfigChangeTimestamp` in SQLite. All write interfaces in settings check `(now - lastConfigChangeTimestamp) >= 172800` seconds. In debug builds, a pre-production bypass flag overrides this check.
