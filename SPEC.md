@@ -9,12 +9,12 @@ flowchart TD
     subgraph UserSpace ["User Space (Unprivileged)"]
         UI["ZoidLockInApp (SwiftUI Window + MenuBarExtra)"]
         Engine["ExchangeEngine (State Coordinator)"]
-        Store["SQLite Store (GRDB / WAL Mode)"]
-        Observer["WorkspaceObserver (ScreenCaptureKit & Frontmost Tracking)"]
+        Store["SQLite Store (Direct SQLite3 C-APIs / WAL Mode)"]
+        Observer["ZoidZeroLiveTracker (Frontmost & Anti-Idle Tracking)"]
         GeminiClient["GeminiAuditService (Keychain Key + REST Client)"]
         MailClient["AlertMailService (Resend API)"]
         SyncManager["SyncManager (iCloud state.json + Push Relay)"]
-        FilterActivator["ContentFilterActivation (NEFilterManager)"]
+        FilterActivator["ContentFilterManager & Activation (NEFilterManager)"]
     end
 
     subgraph PrivilegedSpace ["Privileged Space"]
@@ -70,11 +70,13 @@ flowchart TD
   - Reconciles midnight expiration, surplus vault accruals, and streak calculations.
   - Enforces the 22:00 curfew and permanent Friday rest rules.
 
-### 2.2. `WorkspaceObserver` (Time Tracking & Anti-Idle Engine)
-- **Engine Heritage:** Ported directly from Zoid 0's native workspace session tracking.
-- **Mechanism:** Listens to `NSWorkspace.didActivateApplicationNotification` and window focus transitions via Apple ScreenCaptureKit and Accessibility APIs.
-- **Anti-Idle Human Input Detection:** Taps system event stream (`CGEvent.tapCreate` / IOHIDEventSystem) to monitor physical keyboard and mouse activity frequencies. If zero user input events occur for 5 consecutive minutes (even if a whitelisted IDE is frontmost), the session automatically pauses and enters the 300-second grace window, preventing mouse jiggler and script-based farming.
-- **Classification:** Whitelisted productive tools feed focus ticks into the `ExchangeEngine`. Non-whitelisted apps, screensaver activation, or lock screens trigger an interruption timer.
+### 2.2. Live Activity Tracking Engine (`ZoidZeroLiveTracker` & `FocusSessionCoordinator`)
+- **Engine Heritage:** Ported directly from Zoid 0's native `ApplicationActivityMonitor` and `UserInputIdleDetector` workspace tracking architecture, dropping legacy ScreenCaptureKit window captures in favor of lightweight application notifications and event source sampling.
+- **Live Workspace Observation (`ZoidZeroLiveTracker`):** Registers `NSWorkspace.didActivateApplicationNotification` to intercept frontmost app switches and correlates them with system sleep/wake notifications and screen lock/unlock notifications. Matches active applications against a strict whitelist of productive bundle prefixes (e.g., Xcode, Cursor, VS Code, Terminal, Warp, iTerm2, Linear, Notion, Obsidian, GitHub Client, Figma, Slack, Teams).
+- **Anti-Idle HID Sampling & Layered State Separation:**
+  - **Tracker Sampling Loop (`ZoidZeroLiveTracker`):** Uses a recurring 5-second `DispatchSourceTimer` sampling physical HID idle duration via `CGEventSource.secondsSinceLastEventType(.combinedSessionState, anyInputEventType)` without capturing keystrokes. When physical inactivity reaches or exceeds the 90-second pause threshold, or when switching away to a non-productive application, tracking enters a paused state (`TrackingPauseReason.idle`, `.nonProductiveApp`, `.sleep`, `.locked`).
+  - **Economic Engine State Machine (`FocusMinting` / `ExchangeEngine`):** Manages session presence states independently: micro-pauses with idle `<= 30s` remain in active focus; `30s < idle < 300s` enters the 300-second grace window, holding accrued time; idle `>= 300s` abandons and resets the uncompleted block.
+  - **Session Coordination (`FocusSessionCoordinator`):** Bridges live tracking state changes with the `ExchangeEngine`. When a productive app becomes active and user presence is verified, it automatically drives `engine.startFocus()`. On state changes and interruptions, it ticks the engine to evaluate grace windows and credit milestones.
 
 ### 2.3. `GeminiAuditService` (Multimodal AI Auditor & Sanitizer)
 - **Engine:** REST client targeting Google Generative AI (`gemini-2.5-flash` for initial audits; `gemini-2.5-pro` for formal appeals). Authenticate with the `x-goog-api-key` header only — never a `?key=` query parameter.
@@ -99,16 +101,19 @@ flowchart TD
   - If a target is detected without an active authorized pass, dispatches `SIGSTOP` followed by `SIGKILL` to the process and `killpg` to its process group so child game processes die with the launcher.
 - **Fail-Closed & Auto-Respawn:** Registered with `KeepAlive: true` and `ThrottleInterval: 1`. If communication with `ZoidLockInApp` is lost for more than 5 seconds (Slice 2 heartbeat), the daemon automatically reapplies full lockdown rules.
 
-### 2.6. `SyncManager` (Cross-Device Mobile Shield)
-- **Local Storage:** Writes encrypted JSON (`state.json`) with monotonic versioning and Last-Write-Wins timestamps to the ubiquitous iCloud Container folder (`iCloud~com~mavoid~zoidlockin`).
-- **Relay Dispatch:** Fires HTTP POST webhook to a Cloudflare Worker that publishes Apple Push Notification service (APNs) silent background payloads to registered iOS devices.
-- **iOS Automation:** Personal Automation in iOS Shortcuts receives the payload and toggles the dedicated "Lock In" Focus Filter, restricting mobile applications for the duration of the pass.
+### 2.6. Cross-Device Mobile Shield (`EncryptedStateStore` & `PushRelayClient`)
+- **Encrypted State Store (`EncryptedStateStore`):** Persists lock and pass states as an AES-GCM encrypted envelope (`EncryptedStateEnvelope` version 1) in `state.json`. Enforces monotonic sequence counter high-water marks and strict time-travel rejection guards.
+- **iCloud Drive & Local Fallback:** Resolves the ubiquitous iCloud Container (`iCloud~com~mavoid~zoidlockin`). If iCloud Drive is unavailable, unauthenticated, or running in an offline/test environment, the store automatically falls back to an isolated local application support path (`~/Library/Application Support/ZoidLockIn/mobile-shield/state.json`), ensuring reliable persistence without unhandled exceptions.
+- **Push Relay Dispatch (`PushRelayClient` & `MobileShieldCoordinator`):** Dispatches state synchronization events (`engage_lockdown`, `release_lockdown`, `pass_unlocked`) via an authenticated HTTP POST payload (signed with HMAC-SHA256 or Bearer secret) to a Cloudflare Worker push relay. The worker emits silent APNs background notifications (`SilentAPSPayload`, `content-available: 1`) within a bounded replay window.
+- **iOS Automation:** Personal Automations in iOS Shortcuts receive the silent push and toggle the paired iOS "Lock In" Focus Filter, shutting down distracting mobile apps in lockstep with macOS enforcement.
 
 ---
 
-## 3. Database Schema & Data Models (SQLite / GRDB)
+## 3. Database Schema & Data Models (Direct SQLite3 C-APIs / WAL Mode)
 
-The database is initialized under `~/Library/Application Support/ZoidLockIn/db.sqlite` with WAL mode enabled (`PRAGMA journal_mode = WAL`).
+The local persistence engine uses atomic SQLite with WAL mode, triggers, and transactions via direct system `libsqlite3` C-APIs rather than third-party GRDB or ORMs. This ensures zero third-party dependencies and kernel-safe shared headers, guaranteeing that the privileged helper daemon never links or inherits database engine code.
+
+The database is initialized under `~/Library/Application Support/ZoidLockIn/db.sqlite` (managed via `SQLiteEconomicLedger`) with Write-Ahead Logging (`PRAGMA journal_mode = WAL;`), foreign keys enabled (`PRAGMA foreign_keys = ON;`), busy timeout set to 5000ms (`PRAGMA busy_timeout = 5000;`), and normal synchronous writes (`PRAGMA synchronous = NORMAL;`). Append-only integrity on financial tables is strictly enforced via database triggers (`BEFORE UPDATE` and `BEFORE DELETE` raising abort errors).
 
 ### 3.1. DDL Schema Definition
 
@@ -284,10 +289,18 @@ The communication interface between `ZoidLockInApp` and the privileged helper da
   - `queryEnforcementStatus(withReply: (EnforcementState) -> Void)`
   - `engageEmergencySafetyValve(withReply: (Bool) -> Void)`
 
-### 5.2. Network Extension Content Filter Configuration
-The **unprivileged app** configures the system content filter via `NEFilterManager`. The provider runs in `com.mavoid.zoidlockin.filter`.
+### 5.2. Network Extension Content Filter Configuration & Activation Flow
+The **unprivileged app** manages and configures the system content filter via `ContentFilterManager` and `NEFilterManager.shared()`. The provider runs with bundle identifier `com.mavoid.zoidlockin.filter`.
 
-- **Filter Provider:** `ContentFilterProvider`, subclass of `NEFilterDataProvider`, packaged as a Network System Extension (`content-filter-provider-systemextension`).
+- **Activation UI Flow in Command Dashboard (PRD #21, SPEC §5.2):**
+  - **Component:** The Command Dashboard Settings view integrates a dedicated `ContentFilterSettingsCard` observing `ContentFilterManager`.
+  - **Reactive State Lifecycle:** Tracks and displays real-time activation states:
+    - `DISABLED` (`DISABLED · NOT CONFIGURED`): Extension not installed or preferences disabled. Displays `ACTIVATE CONTENT FILTER` action button.
+    - `PENDING APPROVAL` (`PENDING USER APPROVAL IN SYSTEM SETTINGS`): Extension activation request submitted to `OSSystemExtensionManager`. Displays `PROMPT FILTER AUTHORIZATION` button directing the user to approve the extension in macOS System Settings -> Network -> Filters.
+    - `ENABLED` (`ENABLED · CONTENT FILTER`): Extension approved and `NEFilterManager` preferences active with socket filtering enabled.
+    - `FAILED` (`ACTIVATION FAILED`): Displays localized error text with retry capability.
+  - **Configuration Pipeline:** Upon system extension approval (`request(_:didFinishWithResult:)`), `ContentFilterManager` loads preferences via `NEFilterManager.loadFromPreferences`, attaches `ContentFilterActivation.makeProviderConfiguration()` (explicitly configuring socket filtering via `filterSockets = true` and `filterPackets = false` targeted at `filterDataProviderBundleIdentifier = "com.mavoid.zoidlockin.filter"`), sets `localizedDescription = "Zoid Lock In Content Filter"`, applies `disableEncryptedDNSSettings = true` on macOS 15+ to neutralize DNS-over-HTTPS / Private Relay bypasses, and saves preferences with `isEnabled = true`.
+- **Filter Provider:** `ContentFilterProvider`, subclass of `NEFilterDataProvider`, packaged as a Network System Extension (`content-filter-provider-systemextension`) with provider bundle identifier `com.mavoid.zoidlockin.filter`. Interception is strictly socket-level (`filterSockets = true`, `filterPackets = false`).
 - **Interception Scope:** Outbound TCP **and UDP** flows targeting ports 80, 443, 8080, and 1080. UDP/443 is inspected so HTTP/3 cannot skip the filter.
 - **Rule Resolution Logic:**
   - Extracts hostname from `NEFilterSocketFlow.remoteHostname` or `flow.url` (WebKit / Network.framework metadata). Hostnames are normalized (case-insensitive, leading/trailing dots stripped). IP literals are unverified.
@@ -295,7 +308,7 @@ The **unprivileged app** configures the system content filter via `NEFilterManag
   - Compares verified hostnames against blacklisted suffixes (`youtube.com`, `reddit.com`, `facebook.com`, `instagram.com`, `x.com`, `tiktok.com`, `talabat.com`, `ubereats.com`, `elmenus.com`, …).
   - If match found and no active pass token is verified in the privileged cache, returns `NEFilterNewFlowVerdict.drop()`.
   - If active pass token is valid, returns `NEFilterNewFlowVerdict.allow()`.
-
+- **Verification & Test Coverage:** Verified via `ContentFilterActivationTests` and `ContentFilterManagerTests`, validating mock/live preferences loading, approval state machine transitions, and encrypted DNS defeat.
 ---
 
 ## 6. Verification Gates & Hardened 9-Slice Implementation Roadmap
@@ -311,3 +324,4 @@ The **unprivileged app** configures the system content filter via `NEFilterManag
 | **Slice 7** | Multimodal AI Audit Integration | Gemini Flash Client + Sanitizer + Gemini Pro Arbitration | Prompt injection stripped; mock photo/receipt verified; 3-rejection threshold escalates to Gemini Pro arbitration. |
 | **Slice 8** | Customizable Micro-Habits & Governance | Micro-Habit CRUD + 48-Hour Cooldown | Frequency limits enforced; 1.5 credit/day cap verified; 48-hour edit lockout active with debug override. |
 | **Slice 9** | SUMI-E Ink Desktop Dashboard & Calibration | Standalone Command Dashboard | Full SUMI-E Ink interface; 3-day soft calibration warning banner active; full hard lockdown engaged on Day 4. |
+| **All Slices** | Complete Unit Test & Security Suite | 33 Test Suites / 271 Tests | 100% passing (271 tests in 33 suites, 0 failures) validating state machine transitions, SQLite append-only triggers, XPC security, Content Filter, and anti-tamper guards. |

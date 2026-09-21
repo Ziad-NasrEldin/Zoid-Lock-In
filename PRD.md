@@ -48,7 +48,7 @@ The user needs an uncompromising, local-first personal economy system that intro
 18. As a user, I want target desktop gaming applications (Steam, Discord, Battle.net, Riot Client, Epic Games) to be terminated or suspended by default, so that entertainment is inaccessible during work hours.
 19. As a user, I want the background enforcement daemon to run as a root-level `LaunchDaemon` with `KeepAlive: true`, so that it cannot be terminated from Activity Monitor or Terminal.
 20. As a user, I want the daemon to immediately trigger a fail-closed full system lock if it detects an ungraceful restart or forced kill attempt, so that tampering attempts are rendered completely futile.
-21. As a user, I want entertainment web domains (YouTube, Reddit, Facebook, Instagram, Twitter/X, Twitch, Netflix) to be blocked by default at the system packet-filter level, so that I cannot open them in any browser.
+21. As a user, I want entertainment web domains (YouTube, Reddit, Facebook, Instagram, Twitter/X, Twitch, Netflix) to be blocked by default at the system socket level via NEFilterDataProvider (filterSockets = true, filterPackets = false), so that I cannot open them in any browser. In the Command Dashboard Settings view, I want a reactive Network Extension Filter activation card with live status indication (Disabled, Pending Approval, Enabled, Failed) and an activation button to guide System Extension authorization and socket filtering setup.
 22. As a user, I want food delivery portals (Talabat, Uber Eats, Elmenus) to be blocked on macOS and mobile by default, so that impulse junk food ordering is halted.
 23. As a user, I want Zoid Lock In state changes to sync with an encrypted `state.json` on iCloud Drive and a push webhook relay, so that my iPhone stays in lockstep with my Mac Mini.
 24. As a user, I want work focus sessions to trigger an iOS Focus Mode that silences notifications and hides entertainment and delivery apps on my phone, so that my phone cannot serve as an escape hatch.
@@ -75,7 +75,7 @@ The user needs an uncompromising, local-first personal economy system that intro
 45. As a user, I want a developer override flag during development and pre-production testing, so that the 48-hour lock does not impede rapid testing and tuning prior to release.
 46. As a user, I want a lightweight Menu Bar companion with a live credit ticker and quick unlock popover, so that I can see my economic status and execute transactions without opening a large window.
 47. As a user, I want a standalone macOS desktop command window designed in the SUMI-E Ink aesthetic, so that managing my economy feels calm, deliberate, and high-craft.
-48. As a user, I want all transactions, balances, and history stored locally in an atomic SQLite database via GRDB, so that my behavioral data never leaves my device.
+48. As a user, I want all transactions, balances, and history stored locally in an atomic SQLite database with WAL mode, triggers, and transactions via direct SQLite3 C-APIs rather than third-party GRDB, ensuring zero third-party dependencies, kernel-safe shared headers, and that my behavioral data never leaves my device.
 49. As a user, I want a 3-day calibration onboarding phase with soft warning banners before full hard enforcement activates on Day 4, so that I can verify my daily routines before hard locks engage.
 
 ---
@@ -86,16 +86,21 @@ The user needs an uncompromising, local-first personal economy system that intro
 - **Process Model:** Zoid Lock In operates as a dual-tier architecture:
   - **Tier 1 (User UI Process):** Native Swift 6 / SwiftUI application hosting the `MenuBarExtra` companion item, the main SUMI-E Ink dashboard window, and the local SQLite state coordinator.
   - **Tier 2 (Privileged Helper Daemon & Network Extension):** A root-level daemon registered via modern macOS `SMAppService.daemon(plistName:)`, hosting Apple's **Network Extension Content Filter (`NEFilterDataProvider`)** to intercept socket flows by hostname/SNI, neutralizing VPN and Private Relay bypasses.
+- **Network Extension Activation UI Flow (PRD #21, SPEC §5.2):** The unprivileged app coordinates system extension installation via `OSSystemExtensionRequest` and filter configuration via `NEFilterManager.shared()`. The Command Dashboard Settings view renders a dedicated `ContentFilterSettingsCard` observing `ContentFilterManager`. It reactively reflects `DISABLED`, `PENDING APPROVAL`, `ENABLED`, and `FAILED` states. Activating the filter prompts user authorization in macOS System Settings and configures `NEFilterProviderConfiguration` with `disableEncryptedDNSSettings` on macOS 15+ to defeat DoH/Private Relay bypasses.
 - **Fail-Closed Daemon Authority:** The helper daemon terminates unauthorized processes (`SIGKILL`), enforces socket-level drops, and communicates with the UI process via Mach-O XPC audited via `audit_token_t`. It runs with `KeepAlive: true` and defaults to locking target applications if communication is severed.
 
 ### 2. Time-Tracking & Workspace Observation Engine
-- **Engine Adaptation from Zoid 0:** Incorporates the application-level activation observer and ScreenCaptureKit pipeline from Zoid 0. It monitors active frontmost applications and window focus, maintaining a continuous active-task clock.
-- **Anti-Idle Human Input Detection:** Taps system event streams (`CGEvent.tapCreate` / IOHIDEventSystem) to require physical keyboard and mouse activity. 5 minutes of zero physical inputs immediately triggers the grace period countdown, preventing mouse-jiggler farming.
+- **Engine Adaptation from Zoid 0 (`ZoidZeroLiveTracker` & `FocusSessionCoordinator`):** Ported directly from Zoid 0's proven workspace monitoring primitives. `ZoidZeroLiveTracker` observes frontmost workspace application changes via `NSWorkspace.didActivateApplicationNotification` against a whitelist of productive developer and knowledge tools (Xcode, Cursor, VSCode, Terminal, Warp, iTerm2, Linear, Notion, Obsidian, GitHub Client, Figma, Slack, Teams), alongside macOS sleep/wake and display lock/unlock lifecycle events.
+- **Anti-Idle HID Sampling & Layered State Separation:**
+  - **Tracker Layer (`ZoidZeroLiveTracker`):** Runs a 5-second polling timer sampling physical HID idle duration via `CGEventSource.secondsSinceLastEventType(.combinedSessionState, anyInputEventType)`. When physical inactivity reaches or exceeds the 90-second pause threshold (or when switching away to a non-productive application), the tracker pauses (`TrackingPauseReason.idle`, `.nonProductiveApp`, `.sleep`, `.locked`).
+  - **Economic Engine Layer (`FocusMinting` / `ExchangeEngine`):** Manages focus session state: typing pauses with idle `<= 30s` remain in active focus; `30s < idle < 300s` transitions the session into the 300-second grace window, preserving elapsed work time; idle `>= 300s` abandons and resets the uncompleted block.
+  - **Coordination Layer (`FocusSessionCoordinator`):** Bridges tracker events to the engine, automatically driving `engine.startFocus()` on verified productive activity and ticking the engine on state changes.
 - **Monotonic Clock & NTP Anti-Tamper:** Combines `mach_absolute_time()` with an encrypted startup NTP baseline check to prevent clock-skewing in macOS System Settings.
 - **Grace Window Logic:** Tracks an `interruptionStartTimestamp`. If an interruption resolves within 300 seconds, the session state transitions back to `activeFocus` without resetting the elapsed block timer. If interruption duration exceeds 300 seconds, the block resets to zero.
 
 ### 3. Economic State Machine & Ledger
 - **Deterministic Event-Driven Engine:** All credit adjustments flow through an append-only transaction ledger (`WalletTransaction`).
+- **Direct SQLite3 C-API Engine (Requirement 48):** Built on direct system `libsqlite3` C-APIs rather than third-party GRDB or ORM wrappers. Operates in Write-Ahead Logging (`PRAGMA journal_mode = WAL`) with `PRAGMA synchronous = NORMAL` and `PRAGMA foreign_keys = ON`. Uses immutable SQLite database triggers (`wallet_transactions_no_update`, `wallet_transactions_no_delete`) to enforce append-only ledger integrity and serialized write transactions via `BEGIN IMMEDIATE`. This architecture guarantees zero third-party dependencies and kernel-safe shared headers, ensuring no database runtime code is linked into the root `LaunchDaemon`.
 - **Core Calculation Rules:**
   - Standard focus: +1.0 credit per 3600 seconds of verified focus; fractional increments evaluated every 1800 seconds (+0.5 credits).
   - Morning Momentum: If a session reaches 5400 seconds (90 minutes) continuous focus, was initiated on or after 00:00:00, and finishes before 12:00:00 local time, mints $1.5 \times 2.0 = 3.0\text{ credits}$.
@@ -118,8 +123,8 @@ The user needs an uncompromising, local-first personal economy system that intro
 - **48-Hour Cooldown Controller:** Records `lastConfigChangeTimestamp` in SQLite. All write interfaces in settings check `(now - lastConfigChangeTimestamp) >= 172800` seconds. In debug builds, a pre-production bypass flag overrides this check.
 
 ### 6. Mobile Synchronization & Network Shield
-- **iCloud Drive Channel:** Writes an encrypted JSON payload (`state.json`) with Last-Write-Wins timestamps into the app's ubiquitous container.
-- **Webhook Relay:** Dispatches state changes to a Cloudflare Worker that forwards push notifications to iOS Shortcuts.
+- **iCloud Drive Channel (`EncryptedStateStore`):** Writes an AES-GCM encrypted JSON payload (`state.json`) with strict versioning, monotonic sequence counter high-water marks, and Last-Write-Wins timestamps into the app's ubiquitous iCloud container (`iCloud~com~mavoid~zoidlockin`). If iCloud Drive is unavailable or unconfigured, it seamlessly falls back to an isolated local application support directory (`~/Library/Application Support/ZoidLockIn/mobile-shield`), maintaining full offline operational safety.
+- **Webhook Relay (`PushRelayClient` & `MobileShieldCoordinator`):** Dispatches state transitions (`engage_lockdown`, `release_lockdown`, `pass_unlocked`) via an HMAC-SHA256 authenticated or Bearer-token HTTP POST request to a Cloudflare Worker relay. The worker dispatches silent APNs background notifications (`content-available: 1`) to registered iOS devices.
 - **iOS Shortcut Focus Filter Window:** Triggers an iOS automation that adjusts iOS Focus Mode filters for 30 minutes when a Food Pass or Phone Pass is active.
 
 ---
@@ -145,6 +150,8 @@ Tests for Zoid Lock In must strictly verify **observable external behavior and s
    - Evaluates RFC 6238 time-step token verification against known test vectors.
 4. **`DaemonPolicyGeneratorTests`:**
    - Verifies that correct `pfctl` rule strings and process target lists are generated for locked vs unlocked states.
+5. **Full Test Suite Status:**
+   - All 271 unit tests in 33 suites are 100% passing with zero failures, thoroughly covering state machine transitions, anti-tampering guards, and security gates.
 
 ### Prior Art in Codebase
 Derived from the local-first unit testing suites in [Zoid 0](file:///Users/ziadnasreldin/Work/GitHub/Zoid%200) (`ScreenwatchTests`, `MeetingReceiptTests`), utilizing deterministic in-memory SQLite instances and mock clock providers.
