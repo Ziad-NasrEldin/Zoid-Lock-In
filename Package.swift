@@ -80,7 +80,7 @@ let package = Package(
         // ZoidLockInDaemon — SQLite/GRDB stay out of the privileged helper.
         .target(
             name: "ZoidLockInEconomy",
-            dependencies: ["ZoidLockInCore"],
+            dependencies: ["ZoidLockInCore", "ZoidLockInEnforcer"],
             path: "Sources/ZoidLockInEconomy",
             linkerSettings: [
                 .linkedLibrary("sqlite3"),

@@ -123,4 +123,79 @@ struct DaemonConfigurationTests {
             }
         )
     }
+
+    @Test("packaged layout paths match SMAppService LaunchDaemon conventions")
+    func packagedLayoutPathsMatchConventions() {
+        let config = DaemonConfiguration()
+        let bundleURL = URL(fileURLWithPath: "/tmp/Zoid Lock In.app")
+
+        #expect(DaemonConfiguration.packagedLaunchDaemonsDirectory == "Contents/Library/LaunchDaemons")
+        #expect(
+            DaemonConfiguration.packagedPlistRelativePath
+                == "Contents/Library/LaunchDaemons/com.mavoid.zoidlockin.helper.plist"
+        )
+        #expect(
+            config.packagedPlistURL(inAppBundle: bundleURL).path
+                == "/tmp/Zoid Lock In.app/Contents/Library/LaunchDaemons/com.mavoid.zoidlockin.helper.plist"
+        )
+        #expect(
+            config.packagedHelperURL(inAppBundle: bundleURL).path
+                == "/tmp/Zoid Lock In.app/Contents/MacOS/ZoidLockInDaemon"
+        )
+    }
+
+    @Test("missing packaged helper and plist fail closed")
+    func missingPackagedHelperAndPlistFailClosed() {
+        let config = DaemonConfiguration()
+        let bundleURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ZoidLockIn-empty-\(UUID().uuidString).app")
+        let issues = config.validatePackagedLayout(inAppBundle: bundleURL)
+
+        #expect(issues.contains { $0.contains("Packaged helper missing") })
+        #expect(issues.contains { $0.contains("Packaged LaunchDaemon plist missing") })
+
+        let registrar = DaemonServiceRegistrar(configuration: config)
+        #expect(throws: DaemonRegistrationError.self) {
+            try registrar.validatePackagedLayout(inAppBundle: bundleURL)
+        }
+    }
+
+    @Test("valid packaged helper layout is accepted without weakening fail-closed keys")
+    func validPackagedHelperLayoutIsAccepted() throws {
+        let config = DaemonConfiguration()
+        let fileManager = FileManager.default
+        let bundleURL = fileManager.temporaryDirectory
+            .appendingPathComponent("ZoidLockIn-packaged-\(UUID().uuidString).app")
+        let helperURL = config.packagedHelperURL(inAppBundle: bundleURL)
+        let plistURL = config.packagedPlistURL(inAppBundle: bundleURL)
+
+        try fileManager.createDirectory(
+            at: helperURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: plistURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        fileManager.createFile(atPath: helperURL.path, contents: Data("helper".utf8))
+        try config.propertyListXML().write(to: plistURL, atomically: true, encoding: .utf8)
+        defer { try? fileManager.removeItem(at: bundleURL) }
+
+        #expect(config.validatePackagedLayout(inAppBundle: bundleURL).isEmpty)
+        #expect(throws: Never.self) {
+            try DaemonServiceRegistrar(configuration: config)
+                .validatePackagedLayout(inAppBundle: bundleURL)
+        }
+    }
+
+    @Test("registrar status captions stay fail-closed")
+    func registrarStatusCaptionsStayFailClosed() {
+        #expect(DaemonServiceRegistrar.statusCaption(.enabled) == "ENABLED · ROOT SENTINEL")
+        #expect(
+            DaemonServiceRegistrar.statusCaption(.requiresApproval)
+                == "APPROVAL REQUIRED IN SYSTEM SETTINGS"
+        )
+        #expect(DaemonServiceRegistrar.statusCaption(.notRegistered) == "NOT REGISTERED")
+        #expect(DaemonServiceRegistrar.statusCaption(.notFound) == "BUNDLE HELPER NOT FOUND")
+    }
 }

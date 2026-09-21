@@ -14,6 +14,10 @@ public struct DaemonConfiguration: Sendable, Equatable {
     public static let defaultMachServices: [String: Bool] = [
         ZoidLockInIdentity.enforcementMachServiceName: true,
     ]
+    public static let packagedLaunchDaemonsDirectory = "Contents/Library/LaunchDaemons"
+    public static var packagedPlistRelativePath: String {
+        packagedLaunchDaemonsDirectory + "/" + plistFileName
+    }
 
     public let label: String
     public let bundleProgram: String
@@ -113,5 +117,61 @@ public struct DaemonConfiguration: Sendable, Equatable {
 
     public var isValid: Bool {
         validate().isEmpty
+    }
+
+    public func packagedPlistURL(inAppBundle bundleURL: URL) -> URL {
+        bundleURL
+            .appendingPathComponent("Contents")
+            .appendingPathComponent("Library")
+            .appendingPathComponent("LaunchDaemons")
+            .appendingPathComponent(Self.plistFileName)
+    }
+
+    public func packagedHelperURL(inAppBundle bundleURL: URL) -> URL {
+        bundleURL.appendingPathComponent(bundleProgram)
+    }
+
+    public func validatePackagedLayout(inAppBundle bundleURL: URL) -> [String] {
+        var issues = validate()
+        let fileManager = FileManager.default
+        let helperURL = packagedHelperURL(inAppBundle: bundleURL)
+        let plistURL = packagedPlistURL(inAppBundle: bundleURL)
+
+        if !fileManager.fileExists(atPath: helperURL.path) {
+            issues.append("Packaged helper missing at " + bundleProgram)
+        }
+        guard fileManager.fileExists(atPath: plistURL.path) else {
+            issues.append("Packaged LaunchDaemon plist missing at " + Self.packagedPlistRelativePath)
+            return issues
+        }
+
+        do {
+            let data = try Data(contentsOf: plistURL)
+            let parsed = try PropertyListSerialization.propertyList(from: data, options: [], format: nil)
+            guard let dictionary = parsed as? [String: Any] else {
+                issues.append("Packaged LaunchDaemon plist is not a dictionary")
+                return issues
+            }
+            if dictionary["Label"] as? String != label {
+                issues.append("Packaged LaunchDaemon Label must match the fail-closed helper identity")
+            }
+            if dictionary["BundleProgram"] as? String != bundleProgram {
+                issues.append("Packaged LaunchDaemon BundleProgram must point at the helper binary")
+            }
+            if dictionary["KeepAlive"] as? Bool != true {
+                issues.append("Packaged LaunchDaemon KeepAlive must stay true")
+            }
+            if dictionary["ThrottleInterval"] as? Int != 1 {
+                issues.append("Packaged LaunchDaemon ThrottleInterval must stay 1")
+            }
+            let machServices = dictionary["MachServices"] as? [String: Any]
+            if machServices?[ZoidLockInIdentity.enforcementMachServiceName] as? Bool != true {
+                issues.append("Packaged LaunchDaemon MachServices must enable enforcement")
+            }
+        } catch {
+            issues.append("Packaged LaunchDaemon plist could not be parsed")
+        }
+
+        return issues
     }
 }

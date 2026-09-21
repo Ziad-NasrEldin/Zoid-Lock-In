@@ -47,5 +47,44 @@ cp "${REPO_DIR}/Resources/AppIcon.icns" "${RESOURCES_DIR}/AppIcon.icns"
 echo "==> Ad-hoc signing ${APP_BUNDLE}..."
 codesign --force --deep --sign - "${APP_BUNDLE}"
 
+echo "==> Verifying LaunchDaemon helper packaging..."
+HELPER_BIN="${MACOS_DIR}/ZoidLockInDaemon"
+HELPER_PLIST="${LAUNCH_DAEMONS_DIR}/com.mavoid.zoidlockin.helper.plist"
+if [[ ! -x "${HELPER_BIN}" ]]; then
+    echo "error: packaged helper missing or not executable: ${HELPER_BIN}" >&2
+    exit 1
+fi
+if [[ ! -f "${HELPER_PLIST}" ]]; then
+    echo "error: packaged LaunchDaemon plist missing: ${HELPER_PLIST}" >&2
+    exit 1
+fi
+python3 - "${HELPER_PLIST}" <<'PY'
+import plistlib
+import sys
+
+path = sys.argv[1]
+with open(path, "rb") as handle:
+    payload = plistlib.load(handle)
+
+errors = []
+if payload.get("Label") != "com.mavoid.zoidlockin.helper":
+    errors.append("Label")
+if payload.get("BundleProgram") != "Contents/MacOS/ZoidLockInDaemon":
+    errors.append("BundleProgram")
+if payload.get("KeepAlive") is not True:
+    errors.append("KeepAlive")
+if payload.get("ThrottleInterval") != 1:
+    errors.append("ThrottleInterval")
+mach = payload.get("MachServices") or {}
+if mach.get("com.mavoid.zoidlockin.enforcement") is not True:
+    errors.append("MachServices")
+if errors:
+    raise SystemExit("error: packaged LaunchDaemon plist failed fail-closed checks: " + ", ".join(errors))
+print("==> LaunchDaemon plist fail-closed checks passed")
+PY
+
+echo "==> Packaged helper layout:"
+ls -l "${HELPER_BIN}" "${HELPER_PLIST}"
+
 echo "==> Successfully packaged: ${APP_BUNDLE}"
 echo "==> To launch: open \"${APP_BUNDLE}\""

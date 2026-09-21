@@ -26,9 +26,10 @@ public struct DaemonServiceRegistrar: Sendable {
     /// Registers the daemon with `launchd` via SMAppService.
     @discardableResult
     public func register() throws -> SMAppService.Status {
+        try validateForRegistration()
         let service = makeService()
         try service.register()
-        return service.status
+        return makeService().status
     }
 
     /// Unregisters the daemon.
@@ -39,6 +40,28 @@ public struct DaemonServiceRegistrar: Sendable {
     /// Current registration status.
     public var status: SMAppService.Status {
         makeService().status
+    }
+
+    public static func statusCaption(_ status: SMAppService.Status) -> String {
+        switch status {
+        case .enabled:
+            return "ENABLED · ROOT SENTINEL"
+        case .requiresApproval:
+            return "APPROVAL REQUIRED IN SYSTEM SETTINGS"
+        case .notRegistered:
+            return "NOT REGISTERED"
+        case .notFound:
+            return "BUNDLE HELPER NOT FOUND"
+        @unknown default:
+            return "UNKNOWN"
+        }
+    }
+
+    public func validatePackagedLayout(inAppBundle bundleURL: URL) throws {
+        let issues = configuration.validatePackagedLayout(inAppBundle: bundleURL)
+        guard issues.isEmpty else {
+            throw DaemonRegistrationError.invalidConfiguration(issues)
+        }
     }
 
     /// Ensures configuration is valid before attempting SMAppService registration.

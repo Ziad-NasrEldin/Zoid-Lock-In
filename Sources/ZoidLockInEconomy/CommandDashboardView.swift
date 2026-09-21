@@ -1,6 +1,7 @@
 import ServiceManagement
 import SwiftUI
 import ZoidLockInCore
+import ZoidLockInEnforcer
 
 /// Standalone SUMI-E Ink command dashboard: vault, ledger, 2FA settings.
 public struct CommandDashboardView: View {
@@ -32,6 +33,8 @@ public struct CommandDashboardView: View {
     @State private var newHabitFreq: Int = 1
     @State private var editingEmail: Bool = false
     @State private var newEmailText: String = ""
+    @State private var sentinelStatus: SMAppService.Status
+    @State private var sentinelError: String = ""
 
     public init(
         snapshot: CommandDashboardSnapshot,
@@ -71,6 +74,8 @@ public struct CommandDashboardView: View {
         _newHabitFreq = State(initialValue: 1)
         _editingEmail = State(initialValue: false)
         _newEmailText = State(initialValue: snapshot.security.alertRecipient)
+        _sentinelStatus = State(initialValue: DaemonServiceRegistrar().status)
+        _sentinelError = State(initialValue: "")
     }
 
     public var body: some View {
@@ -1089,23 +1094,8 @@ public struct CommandDashboardView: View {
         .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
-    private var sentinelStatus: SMAppService.Status {
-        SMAppService.daemon(plistName: "com.mavoid.zoidlockin.helper.plist").status
-    }
-
     private var sentinelStatusCaption: String {
-        switch sentinelStatus {
-        case .enabled:
-            return "ENABLED · ROOT SENTINEL"
-        case .requiresApproval:
-            return "APPROVAL REQUIRED IN SYSTEM SETTINGS"
-        case .notRegistered:
-            return "NOT REGISTERED"
-        case .notFound:
-            return "BUNDLE HELPER NOT FOUND"
-        @unknown default:
-            return "UNKNOWN"
-        }
+        DaemonServiceRegistrar.statusCaption(sentinelStatus)
     }
 
     private var sentinelCard: some View {
@@ -1129,9 +1119,14 @@ public struct CommandDashboardView: View {
                 .foregroundStyle(SumiInk.inkMuted)
             if sentinelStatus != .enabled {
                 Button("REGISTER SENTINEL DAEMON") {
-                    try? SMAppService.daemon(plistName: "com.mavoid.zoidlockin.helper.plist").register()
+                    registerSentinelDaemon()
                 }
                 .buttonStyle(SumiInkGhostButton())
+                if !sentinelError.isEmpty {
+                    Text(sentinelError)
+                        .font(SumiInk.caption(10))
+                        .foregroundStyle(SumiInk.seal)
+                }
             } else {
                 Text("Daemon actively supervised by macOS launchd.")
                     .font(SumiInk.caption(10))
@@ -1141,6 +1136,17 @@ public struct CommandDashboardView: View {
         .padding(18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+    }
+
+    private func registerSentinelDaemon() {
+        let registrar = DaemonServiceRegistrar()
+        do {
+            sentinelError = ""
+            sentinelStatus = try registrar.register()
+        } catch {
+            sentinelStatus = registrar.status
+            sentinelError = error.localizedDescription
+        }
     }
 
     private func labeledValue(_ label: String, _ value: String) -> some View {
