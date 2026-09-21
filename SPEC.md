@@ -85,7 +85,7 @@ flowchart TD
 - **Appeal Gate:** Increments local failure count. Only permits secondary arbitration when consecutive failures reach 3.
 
 ### 2.4. `SecurityGatekeeper` (2FA & Cooldown Controller)
-- **Password Auth:** Verifies against Argon2id salted hash stored securely in Keychain.
+- **Password Auth:** Verifies against a PBKDF2-HMAC-SHA256 salted hash stored securely in Keychain (`pbkdf2-sha256$iterations$saltB64$hashB64`; 100,000 iterations, 16-byte salt, 32-byte derived key).
 - **TOTP Engine:** Implements RFC 6238 time-step token verification against a 160-bit shared secret.
 - **Email Dispatch:** Sends immediate psychological warning alerts via Resend API (`api.resend.com/emails`) on successful admin authentication.
 - **48-Hour Lockout:** Checks `last_config_mutation_epoch`. Rejects mutation payloads unless `(now - last_config_mutation_epoch) >= 172800` seconds (bypassed in debug builds via compiler directive).
