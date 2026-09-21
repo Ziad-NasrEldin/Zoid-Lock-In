@@ -302,6 +302,32 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         }
     }
 
+    public func loadPinnedCivilTimeZoneIdentifier() throws -> String? {
+        try withLock {
+            let rows = try database.query(
+                "SELECT pinned_civil_time_zone FROM lifetime_vault WHERE id = 1;"
+            )
+            if case let .text(identifier)? = rows.first?["pinned_civil_time_zone"] {
+                let trimmed = identifier.trimmingCharacters(in: .whitespacesAndNewlines)
+                return trimmed.isEmpty ? nil : trimmed
+            }
+            return nil
+        }
+    }
+
+    public func pinCivilTimeZoneIdentifier(_ identifier: String) throws {
+        try performAtomically {
+            try database.execute(
+                """
+                UPDATE lifetime_vault
+                SET pinned_civil_time_zone = ?
+                WHERE id = 1 AND pinned_civil_time_zone IS NULL;
+                """,
+                [.text(identifier)]
+            )
+        }
+    }
+
     private static func installSchema(on database: SQLiteDatabase) throws {
         try database.execute(
             """
@@ -385,12 +411,19 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 total_surplus_credits REAL NOT NULL DEFAULT 0.0,
                 current_streak INTEGER NOT NULL DEFAULT 0,
-                highest_streak INTEGER NOT NULL DEFAULT 0
+                highest_streak INTEGER NOT NULL DEFAULT 0,
+                pinned_civil_time_zone TEXT
             );
             """
         )
         try database.execute(
             "INSERT OR IGNORE INTO lifetime_vault (id, total_surplus_credits, current_streak, highest_streak) VALUES (1, 0, 0, 0);"
+        )
+        try Self.addColumnIfNeeded(
+            database,
+            table: "lifetime_vault",
+            column: "pinned_civil_time_zone",
+            definition: "TEXT"
         )
         try database.execute(
             "CREATE INDEX IF NOT EXISTS idx_wallet_transactions_timestamp ON wallet_transactions(timestamp);"
@@ -707,6 +740,38 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
             );
             """
         )
+        try database.execute(
+            """
+            CREATE TABLE IF NOT EXISTS admin_audit_events (
+                id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                email_dispatched INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS admin_audit_events_no_update
+            BEFORE UPDATE ON admin_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'admin_audit_events is append-only');
+            END;
+            """
+        )
+        try database.execute(
+            """
+            CREATE TRIGGER IF NOT EXISTS admin_audit_events_no_delete
+            BEFORE DELETE ON admin_audit_events
+            BEGIN
+                SELECT RAISE(ABORT, 'admin_audit_events is append-only');
+            END;
+            """
+        )
+        try database.execute(
+            "CREATE INDEX IF NOT EXISTS idx_admin_audit_events_created ON admin_audit_events(created_at);"
+        )
         try installCalibrationTriggers(database)
     }
 
@@ -958,6 +1023,17 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
         }
     }
 
+    static func rawDouble(_ value: SQLiteValue?) -> Double {
+        switch value {
+        case .double(let number):
+            return number
+        case .integer(let number):
+            return Double(number)
+        default:
+            return 0
+        }
+    }
+
     static func int(_ value: SQLiteValue?) -> Int64 {
         switch value {
         case .integer(let number):
@@ -978,16 +1054,18 @@ public final class SQLiteEconomicLedger: EconomicLedger, @unchecked Sendable {
 
 enum LedgerISO8601 {
     static func string(from date: Date) -> String {
-        date.ISO8601Format()
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
     }
 
     static func date(from string: String) -> Date? {
         let formatter = ISO8601DateFormatter()
-        formatter.formatOptions = [.withInternetDateTime]
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         if let date = formatter.date(from: string) {
             return date
         }
-        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        formatter.formatOptions = [.withInternetDateTime]
         return formatter.date(from: string)
     }
 }

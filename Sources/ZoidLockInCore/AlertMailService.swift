@@ -238,24 +238,19 @@ public struct AlertMailService: EmergencyIncidentAlerting, AdminAlertDispatching
     ) -> ResendEmailPayload {
         let timestamp = ISO8601DateFormatter().string(from: event.timestamp)
         let subject: String
-        let headline: String
         switch event.kind {
         case .settingsUnlocked:
-            subject = "WARNING: Admin settings unlocked"
-            headline = "Administrative 2FA settings were unlocked."
+            subject = "CRITICAL: You entered Admin Dashboard. Stand firm."
         case .configurationMutated:
-            subject = "WARNING: Administrative configuration mutated"
-            headline = "An authenticated admin mutated Zoid Lock In configuration."
+            subject = "CRITICAL SECURITY & INTEGRITY ALERT: Configuration mutated"
         }
         let text = """
-        PSYCHOLOGICAL COMMITMENT ALERT: \(headline)
+        CRITICAL SECURITY & INTEGRITY ALERT: You have authenticated into the Zoid 0 Trading Center Admin Settings. Remember why you erected these walls: to conquer procrastination and realize your highest potential. Do not lower prices, grant unearned credits, or negotiate with weakness. Any unearned modification is a defeat.
 
         Event: \(event.kind.rawValue)
         Timestamp: \(timestamp)
         Recipient: \(event.recipient)
         Detail: \(event.detail.isEmpty ? "—" : event.detail)
-
-        The 48-hour governance cooldown still applies to price, habit, and blocklist edits.
         """
         return ResendEmailPayload(
             from: from,

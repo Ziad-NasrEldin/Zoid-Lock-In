@@ -2,6 +2,7 @@ import Foundation
 
 public enum SecurityGatekeeperError: Error, Equatable, Sendable {
     case passwordTooShort(minimum: Int)
+    case passwordTooWeak(missing: [String])
     case passwordMismatch
     case passwordConfirmationMismatch
     case totpMismatch
@@ -16,6 +17,8 @@ extension SecurityGatekeeperError: LocalizedError {
         switch self {
         case .passwordTooShort(let minimum):
             return "Password must be at least \(minimum) characters."
+        case .passwordTooWeak:
+            return "Password must include uppercase, lowercase, numbers, and symbols."
         case .passwordMismatch:
             return "Password does not match."
         case .passwordConfirmationMismatch:
@@ -59,24 +62,30 @@ public struct AdminAlertEvent: Sendable, Equatable {
 }
 
 public struct AdminAuditRecord: Sendable, Equatable {
+    public var id: UUID
     public var kind: AdminAlertKind
     public var timestamp: Date
     public var recipient: String
     public var emailDispatched: Bool
     public var errorDescription: String?
+    public var detail: String
 
     public init(
         kind: AdminAlertKind,
         timestamp: Date,
         recipient: String,
         emailDispatched: Bool,
-        errorDescription: String? = nil
+        errorDescription: String? = nil,
+        id: UUID = UUID(),
+        detail: String = ""
     ) {
+        self.id = id
         self.kind = kind
         self.timestamp = timestamp
         self.recipient = recipient
         self.emailDispatched = emailDispatched
         self.errorDescription = errorDescription
+        self.detail = detail
     }
 }
 
@@ -89,6 +98,30 @@ public struct NoOpAdminAlertDispatcher: AdminAlertDispatching, Sendable {
 
     public func dispatchAdminAlert(_ event: AdminAlertEvent) async throws {
         _ = event
+    }
+}
+
+public protocol AdminAuditPersisting: Sendable {
+    func appendAdminAudit(_ record: AdminAuditRecord) throws
+    func allAdminAuditEvents() throws -> [AdminAuditRecord]
+}
+
+public final class InMemoryAdminAuditStore: AdminAuditPersisting, @unchecked Sendable {
+    private let lock = NSLock()
+    private var records: [AdminAuditRecord] = []
+
+    public init() {}
+
+    public func appendAdminAudit(_ record: AdminAuditRecord) throws {
+        lock.lock()
+        defer { lock.unlock() }
+        records.append(record)
+    }
+
+    public func allAdminAuditEvents() throws -> [AdminAuditRecord] {
+        lock.lock()
+        defer { lock.unlock() }
+        return records
     }
 }
 
@@ -159,11 +192,14 @@ public final class SecurityGatekeeper: @unchecked Sendable {
     public let keychain: any KeychainDataStoring
     public let mail: any AdminAlertDispatching
     public let wallClock: any WallClockProviding
+    public let clock: any MonotonicTimeProviding
     public let service: String
+    public let auditStore: (any AdminAuditPersisting)?
 
     private let mutex = NSLock()
     private var unlocked = false
     private var unlockedAt: Date?
+    private var unlockedMonotonicAt: TimeInterval?
     private var lastError: String?
     private var lastAlertKind: AdminAlertKind?
     private var replay = TOTPReplayWindow()
@@ -175,16 +211,23 @@ public final class SecurityGatekeeper: @unchecked Sendable {
         keychain: any KeychainDataStoring,
         mail: any AdminAlertDispatching = NoOpAdminAlertDispatcher(),
         wallClock: any WallClockProviding = SystemWallClock(),
-        service: String = ZoidLockInKeychain.securityService
+        clock: any MonotonicTimeProviding = MachContinuousTimeClock(),
+        service: String = ZoidLockInKeychain.securityService,
+        auditStore: (any AdminAuditPersisting)? = nil
     ) {
         self.keychain = keychain
         self.mail = mail
         self.wallClock = wallClock
+        self.clock = clock
         self.service = service
+        self.auditStore = auditStore
         if let stored = keychain.data(service: service, account: ZoidLockInKeychain.totpLastWindowAccount),
            let text = String(data: stored, encoding: .utf8),
            let value = UInt64(text) {
             replay.lastUsedTOTPWindow = value
+        }
+        if let persisted = try? auditStore?.allAdminAuditEvents() {
+            auditEvents = persisted
         }
     }
 
@@ -194,13 +237,15 @@ public final class SecurityGatekeeper: @unchecked Sendable {
 
     private func isUnlockedLocked() -> Bool {
         guard unlocked else { return false }
-        if let unlockedAt {
-            let elapsed = wallClock.now().timeIntervalSince(unlockedAt)
-            if elapsed >= Self.sessionTimeoutSeconds {
-                unlocked = false
-                self.unlockedAt = nil
-                return false
-            }
+        let wallElapsed = unlockedAt.map { wallClock.now().timeIntervalSince($0) }
+        let monoElapsed = unlockedMonotonicAt.map { clock.nowSeconds() - $0 }
+        let expiredByWall = wallElapsed.map { $0 < 0 || $0 >= Self.sessionTimeoutSeconds } ?? false
+        let expiredByMono = monoElapsed.map { $0 < 0 || $0 >= Self.sessionTimeoutSeconds } ?? false
+        if expiredByWall || expiredByMono {
+            unlocked = false
+            unlockedAt = nil
+            unlockedMonotonicAt = nil
+            return false
         }
         return true
     }
@@ -298,6 +343,12 @@ public final class SecurityGatekeeper: @unchecked Sendable {
         } catch {
             rememberError(SecurityGatekeeperError.passwordTooShort(minimum: Self.minimumPasswordLength).localizedDescription)
             throw SecurityGatekeeperError.passwordTooShort(minimum: Self.minimumPasswordLength)
+        }
+        let complexity = PasswordHasher.validateComplexity(password)
+        if !complexity.isValid {
+            let error = SecurityGatekeeperError.passwordTooWeak(missing: complexity.missing)
+            rememberError(error.localizedDescription)
+            throw error
         }
         let secret = try totpSecret.map { try normalizeSecret($0) } ?? TOTPEngine.generateSecret()
         let now = wallClock.now()
@@ -426,6 +477,7 @@ public final class SecurityGatekeeper: @unchecked Sendable {
         withMutex {
             unlocked = false
             unlockedAt = nil
+            unlockedMonotonicAt = nil
             lastError = nil
         }
     }
@@ -469,11 +521,11 @@ public final class SecurityGatekeeper: @unchecked Sendable {
             rememberError(SecurityGatekeeperError.totpMismatch.localizedDescription)
             throw SecurityGatekeeperError.totpMismatch
         }
-        if let last = replay.lastUsedTOTPWindow, window <= last {
+        let accepted = withMutex { replay.consume(window) }
+        if !accepted {
             rememberError(SecurityGatekeeperError.totpMismatch.localizedDescription)
             throw SecurityGatekeeperError.totpMismatch
         }
-        replay.lastUsedTOTPWindow = window
         persistReplayWindow(window)
         return window
     }
@@ -494,7 +546,8 @@ public final class SecurityGatekeeper: @unchecked Sendable {
                     kind: event.kind,
                     timestamp: event.timestamp,
                     recipient: event.recipient,
-                    emailDispatched: true
+                    emailDispatched: true,
+                    detail: event.detail
                 )
             )
         } catch {
@@ -504,7 +557,8 @@ public final class SecurityGatekeeper: @unchecked Sendable {
                     timestamp: event.timestamp,
                     recipient: event.recipient,
                     emailDispatched: false,
-                    errorDescription: error.localizedDescription
+                    errorDescription: error.localizedDescription,
+                    detail: event.detail
                 )
             )
         }
@@ -517,12 +571,14 @@ public final class SecurityGatekeeper: @unchecked Sendable {
                 lastError = record.errorDescription
             }
         }
+        try? auditStore?.appendAdminAudit(record)
     }
 
     private func markUnlocked(alertKind: AdminAlertKind) {
         withMutex {
             unlocked = true
             unlockedAt = wallClock.now()
+            unlockedMonotonicAt = clock.nowSeconds()
             lastError = nil
             lastAlertKind = alertKind
         }

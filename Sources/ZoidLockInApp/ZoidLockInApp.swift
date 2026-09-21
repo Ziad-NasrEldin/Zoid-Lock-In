@@ -285,7 +285,9 @@ final class MenuBarSession: ObservableObject {
             keychain: FileSecureDataStore.shared,
             mail: AlertMailService(
                 configuration: AlertMailConfiguration(recipient: SecurityGatekeeper.defaultRecipient)
-            )
+            ),
+            clock: MachContinuousTimeClock(),
+            auditStore: resolved
         )
         let habitGovernance = GovernanceLockCoordinator(
             store: resolved,

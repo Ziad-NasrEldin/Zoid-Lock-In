@@ -163,7 +163,7 @@ public struct TOTPReplayWindow: Sendable, Equatable {
     }
 
     public mutating func consume(_ window: UInt64) -> Bool {
-        if lastUsedTOTPWindow == window {
+        if let last = lastUsedTOTPWindow, window <= last {
             return false
         }
         lastUsedTOTPWindow = window
