@@ -561,71 +561,97 @@ public struct CommandDashboardView: View {
         .overlay(alignment: .bottom) { Rectangle().fill(SumiInk.rule.opacity(0.55)).frame(height: 1) }
     }
 
+    private func registerRow<Accessory: View>(
+        label: String,
+        value: String,
+        note: String,
+        emphasized: Bool = false,
+        @ViewBuilder accessory: () -> Accessory
+    ) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 18) {
+            Text(label)
+                .font(SumiInk.caption(10))
+                .tracking(1.8)
+                .foregroundStyle(SumiInk.inkMuted)
+                .frame(width: 88, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(value)
+                    .font(SumiInk.display(22))
+                    .monospacedDigit()
+                    .foregroundStyle(SumiInk.ink)
+                Text(note)
+                    .font(SumiInk.body(12))
+                    .foregroundStyle(SumiInk.inkMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            accessory()
+        }
+        .padding(.vertical, 14)
+        .overlay(alignment: .bottom) { Rectangle().fill(SumiInk.rule.opacity(0.7)).frame(height: 1) }
+    }
+
+    private func registerRow(
+        label: String,
+        value: String,
+        note: String,
+        emphasized: Bool = false
+    ) -> some View {
+        registerRow(label: label, value: value, note: note, emphasized: emphasized) {
+            EmptyView()
+        }
+    }
+
     private var settingsPane: some View {
-        HStack(alignment: .top, spacing: 28) {
-            VStack(alignment: .leading, spacing: 16) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("ADMINISTRATIVE GOVERNANCE & SETTINGS")
-                        .font(SumiInk.caption(10))
-                        .tracking(2.0)
-                        .foregroundStyle(SumiInk.inkMuted)
-                    Text("48-Hour Rate Limiting · 2FA Protection")
-                        .font(SumiInk.heading(22))
-                        .foregroundStyle(SumiInk.ink)
-                    Text("Any change to amenity pricing, habit rewards, or blocked domain rules engages the 48-hour monotonic cooldown. Admin access is authenticated via local 2FA credentials.")
-                        .font(SumiInk.body(12))
-                        .foregroundStyle(SumiInk.inkMuted)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                if snapshot.security.isUnlocked {
-                    sessionBar
-                }
-
-                ScrollView(.vertical, showsIndicators: false) {
-                    VStack(alignment: .leading, spacing: 18) {
-                        if snapshot.security.isUnlocked {
-                            amenityPriceEditor
-                            blocklistRuleEditor
-                            habitSettingsSection
-                        } else if snapshot.security.isEnrolled {
-                            lockedSettings
-                            amenityPriceEditor
-                            blocklistRuleEditor
-                            habitSettingsSection
-                        } else {
-                            enrollmentSettings
-                            amenityPriceEditor
-                            blocklistRuleEditor
-                            habitSettingsSection
-                        }
-                    }
-                    .padding(.bottom, 24)
-                }
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("REGISTER")
+                    .font(SumiInk.caption(10))
+                    .tracking(2.4)
+                    .foregroundStyle(SumiInk.inkMuted)
+                Text("Settings")
+                    .font(SumiInk.heading(22))
+                    .foregroundStyle(SumiInk.ink)
             }
-            .frame(maxWidth: .infinity, alignment: .topLeading)
+            .padding(.bottom, 16)
 
-            VStack(alignment: .leading, spacing: 16) {
-                governanceCard
-                emergencyCard
-                sentinelCard
-                contentFilterCard
+            if snapshot.security.isUnlocked {
+                sessionBar
+            } else if snapshot.security.isEnrolled {
+                lockedSettings
+            } else {
+                enrollmentSettings
             }
-            .frame(width: 360)
+
+            Rectangle()
+                .fill(SumiInk.rule)
+                .frame(height: 1)
+                .padding(.top, 18)
+
+            priceRegister
+            domainRegister
+            habitRegister
+            cooldownRegister
+            emergencyRegister
+            sentinelRegister
+            contentFilterCard
+
+            Spacer(minLength: 16)
         }
         .padding(.horizontal, 36)
         .padding(.bottom, 28)
     }
 
+    private var configurationLocked: Bool {
+        !snapshot.security.isUnlocked || (snapshot.governance.isLocked && !snapshot.governance.isBypassEnabled)
+    }
+
     private var lockedSettings: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                Text("2FA PROTECTION ACTIVE")
-                    .font(SumiInk.caption(10))
-                    .tracking(1.8)
-                    .foregroundStyle(SumiInk.seal)
-                Spacer()
-            }
+        VStack(alignment: .leading, spacing: 10) {
+            Text("LOCKED")
+                .font(SumiInk.caption(10))
+                .tracking(1.8)
+                .foregroundStyle(SumiInk.inkMuted)
             SecureField("Password (12+ characters)", text: $password)
                 .textFieldStyle(.plain)
                 .font(SumiInk.body(14))
@@ -639,7 +665,7 @@ public struct CommandDashboardView: View {
             if let error = snapshot.security.unlockError {
                 Text(error)
                     .font(SumiInk.body(12))
-                    .foregroundStyle(SumiInk.seal)
+                    .foregroundStyle(SumiInk.inkMuted)
             }
             Button("UNLOCK SETTINGS") {
                 let submittedPassword = password
@@ -650,20 +676,15 @@ public struct CommandDashboardView: View {
             .buttonStyle(SumiInkSealButton())
             .disabled(password.count < SecurityGatekeeper.minimumPasswordLength || totp.count < 6)
         }
-        .padding(18)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+        .padding(.bottom, 4)
     }
 
     private var enrollmentSettings: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("ENROLL ADMIN 2FA")
+        VStack(alignment: .leading, spacing: 10) {
+            Text("ENROLL")
                 .font(SumiInk.caption(10))
                 .tracking(1.8)
-                .foregroundStyle(SumiInk.seal)
-            Text("Set a 12+ character password and confirm a generated authenticator secret with a test code. Configuration writes stay open until enrollment completes.")
-                .font(SumiInk.body(13))
                 .foregroundStyle(SumiInk.inkMuted)
-                .fixedSize(horizontal: false, vertical: true)
             SecureField("Password (12+ characters, upper/lower/number/symbol)", text: $password)
                 .textFieldStyle(.plain)
                 .font(SumiInk.body(14))
@@ -673,7 +694,7 @@ public struct CommandDashboardView: View {
             if !password.isEmpty && !complexity.isValid {
                 Text("Requires: " + complexity.missing.joined(separator: ", "))
                     .font(SumiInk.caption(10))
-                    .foregroundStyle(SumiInk.seal)
+                    .foregroundStyle(SumiInk.inkMuted)
             }
             SecureField("Confirm password", text: $confirmPassword)
                 .textFieldStyle(.plain)
@@ -704,7 +725,7 @@ public struct CommandDashboardView: View {
             if let error = snapshot.security.unlockError {
                 Text(error)
                     .font(SumiInk.body(12))
-                    .foregroundStyle(SumiInk.seal)
+                    .foregroundStyle(SumiInk.inkMuted)
             }
             Button("ENROLL 2FA") {
                 let submittedPassword = password
@@ -722,8 +743,7 @@ public struct CommandDashboardView: View {
                     || enrollSecret.isEmpty
             )
         }
-        .padding(18)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+        .padding(.bottom, 4)
         .onAppear {
             if enrollSecret.isEmpty {
                 enrollSecret = (try? TOTPEngine.generateSecret()) ?? ""
@@ -731,49 +751,14 @@ public struct CommandDashboardView: View {
         }
     }
 
-    private var unlockedSettings: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            sessionBar
-            amenityPriceEditor
-            blocklistRuleEditor
-            habitSettingsSection
-        }
-    }
-
     private var sessionBar: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("GATE UNLOCKED · 10-MINUTE ADMIN SESSION ACTIVE")
-                        .font(SumiInk.caption(10))
-                        .tracking(1.8)
-                        .foregroundStyle(SumiInk.seal)
-                    if snapshot.governance.isBypassEnabled {
-                        Text("PRE-PRODUCTION OVERRIDE ACTIVE (PRD #45)")
-                            .font(SumiInk.caption(9))
-                            .tracking(1.2)
-                            .foregroundStyle(SumiInk.inkMuted)
-                    }
-                }
+                Text("OPEN")
+                    .font(SumiInk.caption(10))
+                    .tracking(1.8)
+                    .foregroundStyle(SumiInk.inkMuted)
                 Spacer()
-                if snapshot.governance.isClockTampered || snapshot.governance.isLocked {
-                    Button("RESET 48H COOLDOWN") {
-                        onResetLock?()
-                    }
-                    .buttonStyle(SumiInkSealButton())
-                }
-                if snapshot.governance.isBypassEnabled {
-                    Button("BYPASS: ACTIVE") {
-                        onToggleCooldownBypass?()
-                    }
-                    .buttonStyle(SumiInkSealButton())
-                } else {
-                    Button("BYPASS 48H COOLDOWN") {
-                        onToggleCooldownBypass?()
-                    }
-                    .buttonStyle(SumiInkGhostButton())
-                }
-
                 Button("LOCK SETTINGS") {
                     clearSecrets()
                     onLock?()
@@ -782,10 +767,11 @@ public struct CommandDashboardView: View {
             }
 
             HStack(alignment: .center, spacing: 12) {
-                Text("Alert Mail Recipient:")
+                Text("MAIL")
                     .font(SumiInk.caption(10))
-                    .tracking(1.2)
+                    .tracking(1.8)
                     .foregroundStyle(SumiInk.inkMuted)
+                    .frame(width: 88, alignment: .leading)
 
                 if editingEmail {
                     TextField("new-email@domain.com", text: $newEmailText)
@@ -822,374 +808,160 @@ public struct CommandDashboardView: View {
             }
 
             if snapshot.security.mailDispatchFailed {
-                Text("Local audit mode (no Resend API key configured). Administrative alerts are recorded locally.")
+                Text("Local audit mode")
                     .font(SumiInk.body(11))
                     .foregroundStyle(SumiInk.inkMuted)
             }
         }
-        .padding(16)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-        .background(SumiInk.sealWash.opacity(0.4))
+        .padding(.bottom, 4)
     }
 
-    private var amenityPriceEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("AMENITY PRICING SCHEDULE")
-                        .font(SumiInk.caption(10))
-                        .tracking(1.8)
-                        .foregroundStyle(SumiInk.inkMuted)
-                    Text("Configure Living Comfort & Pass Credit Costs")
-                        .font(SumiInk.heading(18))
-                        .foregroundStyle(SumiInk.ink)
-                }
-                Spacer()
-                if !snapshot.security.isUnlocked {
-                    Text("2FA UNLOCK REQUIRED TO EDIT")
-                        .font(SumiInk.caption(9))
-                        .tracking(1.4)
-                        .foregroundStyle(SumiInk.seal)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(SumiInk.sealWash)
-                        .overlay(Rectangle().stroke(SumiInk.seal, lineWidth: 1))
-                } else if snapshot.governance.isLocked && !snapshot.governance.isBypassEnabled {
-                    Text("48H COOLDOWN ACTIVE · READ-ONLY")
-                        .font(SumiInk.caption(9))
-                        .tracking(1.4)
-                        .foregroundStyle(SumiInk.seal)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .background(SumiInk.sealWash)
-                        .overlay(Rectangle().stroke(SumiInk.seal, lineWidth: 1))
-                }
-            }
-
-            Text("Any price modification records an immutable HMAC seal and engages the 48-hour cooldown period. Changes apply immediately to the Marketplace and local socket filters.")
-                .font(SumiInk.body(12))
-                .foregroundStyle(SumiInk.inkMuted)
-
-            VStack(spacing: 8) {
-                ForEach(AmenityKind.allCases, id: \.self) { kind in
-                    amenityPriceRow(kind: kind)
-                }
+    private var priceRegister: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ForEach(AmenityKind.allCases, id: \.self) { kind in
+                amenityPriceRow(kind: kind)
             }
         }
-        .padding(16)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
     private func amenityPriceRow(kind: AmenityKind) -> some View {
         let current = snapshot.currentCost(for: kind)
         let standard = AmenityCatalog.standard.intrinsicCost(of: kind)
-        let isOverridden = snapshot.isPriceOverridden(for: kind)
-        let isLocked = !snapshot.security.isUnlocked || (snapshot.governance.isLocked && !snapshot.governance.isBypassEnabled)
-
-        return HStack(spacing: 12) {
-            Text(kind.sealGlyph)
-                .font(.system(size: 12, weight: .bold, design: .serif))
-                .foregroundStyle(Color.white)
-                .frame(width: 24, height: 24)
-                .background(isOverridden ? SumiInk.seal : SumiInk.ink)
-
-            VStack(alignment: .leading, spacing: 2) {
-                HStack(spacing: 6) {
-                    Text(kind.displayName)
-                        .font(SumiInk.body(13))
-                        .foregroundStyle(SumiInk.ink)
-                    if isOverridden {
-                        Text("OVERRIDE")
-                            .font(SumiInk.caption(8))
-                            .tracking(1.0)
-                            .foregroundStyle(SumiInk.seal)
-                            .padding(.horizontal, 4)
-                            .padding(.vertical, 1)
-                            .background(SumiInk.sealWash)
+        let note = snapshot.isPriceOverridden(for: kind)
+            ? "std \(CreditMath.displayString(standard))c"
+            : "standard"
+        return registerRow(
+            label: kind == AmenityKind.allCases.first ? "PRICES" : "",
+            value: "\(kind.displayName)  ·  \(CreditMath.displayString(current))c",
+            note: note
+        ) {
+            if snapshot.security.isUnlocked && !configurationLocked {
+                HStack(spacing: 4) {
+                    Button("−0.5") {
+                        onUpdateAmenityPrice?(kind, max(0.5, current - 0.5))
                     }
-                }
-                Text(kind.subtitle)
-                    .font(SumiInk.body(11))
-                    .foregroundStyle(SumiInk.inkMuted)
-            }
-
-            Spacer()
-
-            VStack(alignment: .trailing, spacing: 2) {
-                Text("\(CreditMath.displayString(current))c")
-                    .font(SumiInk.display(16))
-                    .monospacedDigit()
-                    .foregroundStyle(isOverridden ? SumiInk.seal : SumiInk.ink)
-                Text("std: \(CreditMath.displayString(standard))c")
-                    .font(SumiInk.caption(9))
-                    .foregroundStyle(SumiInk.inkMuted)
-            }
-
-            HStack(spacing: 4) {
-                Button("−0.5") {
-                    let newPrice = max(0.5, current - 0.5)
-                    onUpdateAmenityPrice?(kind, newPrice)
-                }
-                .buttonStyle(SumiInkGhostButton())
-                .disabled(isLocked)
-
-                Button("+0.5") {
-                    let newPrice = min(50.0, current + 0.5)
-                    onUpdateAmenityPrice?(kind, newPrice)
-                }
-                .buttonStyle(SumiInkGhostButton())
-                .disabled(isLocked)
-            }
-            .opacity(isLocked ? 0.6 : 1.0)
-        }
-        .padding(10)
-        .background(SumiInk.paperSoft)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-    }
-
-    private var blocklistRuleEditor: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("DOMAIN BLOCKLIST RULES")
-                    .font(SumiInk.caption(10))
-                    .tracking(1.8)
-                    .foregroundStyle(SumiInk.inkMuted)
-                Text("Custom Distraction Domains")
-                    .font(SumiInk.heading(18))
-                    .foregroundStyle(SumiInk.ink)
-            }
-
-            Text("Domains blocked by default via Packet Filter and Network Extension. Adding or deleting a domain engages the 48-hour rate-limit.")
-                .font(SumiInk.body(12))
-                .foregroundStyle(SumiInk.inkMuted)
-
-            let isLocked = !snapshot.security.isUnlocked || (snapshot.governance.isLocked && !snapshot.governance.isBypassEnabled)
-
-            HStack(spacing: 8) {
-                TextField(!snapshot.security.isUnlocked ? "2FA unlock required to add domain" : isLocked ? "Cooldown active (locked for \(snapshot.governance.remainingCaption))" : "Enter domain suffix (e.g. reddit.com)", text: $newDomain)
-                    .textFieldStyle(.plain)
-                    .font(SumiInk.body(13))
-                    .padding(8)
-                    .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-                    .disabled(isLocked)
-
-                Button("ADD DOMAIN") {
-                    let trimmed = newDomain.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !trimmed.isEmpty {
-                        onAddBlocklistRule?(trimmed)
-                        newDomain = ""
+                    .buttonStyle(SumiInkGhostButton())
+                    Button("+0.5") {
+                        onUpdateAmenityPrice?(kind, min(50.0, current + 0.5))
                     }
+                    .buttonStyle(SumiInkGhostButton())
                 }
-                .buttonStyle(SumiInkSealButton())
-                .disabled(isLocked || newDomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            }
-            .opacity(isLocked ? 0.6 : 1.0)
-
-            if snapshot.blocklistRules.isEmpty {
-                Text("No custom domain rules configured. Default system catalog rules are active.")
-                    .font(SumiInk.body(12))
-                    .foregroundStyle(SumiInk.inkMuted)
-                    .padding(.vertical, 8)
             } else {
-                VStack(spacing: 6) {
-                    ForEach(snapshot.blocklistRules) { rule in
-                        HStack {
-                            Text("●")
-                                .font(.system(size: 8))
-                                .foregroundStyle(SumiInk.seal)
-                            Text(rule.suffix)
-                                .font(SumiInk.body(13))
-                                .foregroundStyle(SumiInk.ink)
-                            Spacer()
-                            Button("REMOVE") {
-                                onRemoveBlocklistRule?(rule.suffix)
-                            }
-                            .buttonStyle(SumiInkGhostButton())
-                            .disabled(isLocked)
-                            .opacity(isLocked ? 0.5 : 1.0)
-                        }
-                        .padding(8)
-                        .background(SumiInk.paperSoft)
-                        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-                    }
-                }
+                EmptyView()
             }
         }
-        .padding(16)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
-    private var habitSettingsSection: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            VStack(alignment: .leading, spacing: 4) {
-                Text("DAILY DISCIPLINE MICRO-HABITS")
-                    .font(SumiInk.caption(10))
-                    .tracking(1.8)
-                    .foregroundStyle(SumiInk.inkMuted)
-                Text("Micro-Habits Catalog & Budget")
-                    .font(SumiInk.heading(18))
-                    .foregroundStyle(SumiInk.ink)
-            }
-
-            Text("Non-work daily tasks award up to +1.50 credits/day total. Adding tasks enforces strict daily caps.")
-                .font(SumiInk.body(12))
-                .foregroundStyle(SumiInk.inkMuted)
-
-            let isLocked = !snapshot.security.isUnlocked || (snapshot.governance.isLocked && !snapshot.governance.isBypassEnabled)
-
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    TextField(!snapshot.security.isUnlocked ? "2FA unlock required to add habits" : isLocked ? "Cooldown active (\(snapshot.governance.remainingCaption))" : "Habit title (e.g. 10m Meditation)", text: $newHabitTitle)
-                        .textFieldStyle(.plain)
-                        .font(SumiInk.body(13))
-                        .padding(8)
-                        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-                        .disabled(isLocked)
-
-                    Picker("Reward", selection: $newHabitReward) {
-                        Text("+0.25c").tag(0.25)
-                        Text("+0.50c").tag(0.50)
-                        Text("+0.75c").tag(0.75)
-                        Text("+1.00c").tag(1.00)
-                    }
-                    .frame(width: 90)
-                    .disabled(isLocked)
-
-                    Picker("Daily", selection: $newHabitFreq) {
-                        Text("1x/day").tag(1)
-                        Text("2x/day").tag(2)
-                        Text("3x/day").tag(3)
-                        Text("4x/day").tag(4)
-                        Text("5x/day").tag(5)
-                    }
-                    .frame(width: 80)
-                    .disabled(isLocked)
-
-                    Button("CREATE") {
-                        let title = newHabitTitle.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !title.isEmpty {
-                            onCreateHabit?(title, newHabitReward, newHabitFreq)
-                            newHabitTitle = ""
+    private var domainRegister: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if snapshot.security.isUnlocked && !configurationLocked {
+                registerRow(
+                    label: "DOMAINS",
+                    value: snapshot.blocklistRules.isEmpty ? "default catalog" : "\(snapshot.blocklistRules.count) custom",
+                    note: "suffix"
+                ) {
+                    HStack(spacing: 8) {
+                        TextField("reddit.com", text: $newDomain)
+                            .textFieldStyle(.plain)
+                            .font(SumiInk.body(13))
+                            .padding(6)
+                            .frame(width: 180)
+                            .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+                        Button("ADD") {
+                            let trimmed = newDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !trimmed.isEmpty {
+                                onAddBlocklistRule?(trimmed)
+                                newDomain = ""
+                            }
                         }
+                        .buttonStyle(SumiInkSealButton())
+                        .disabled(newDomain.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
-                    .buttonStyle(SumiInkSealButton())
-                    .disabled(isLocked || newHabitTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
-            }
-            .padding(10)
-            .background(SumiInk.paperSoft)
-            .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-            .opacity(isLocked ? 0.6 : 1.0)
-
-            if snapshot.habits.isEmpty {
-                Text("Default starter habits catalog active (Brushing Teeth, Making Bed, Hydration, Movement).")
-                    .font(SumiInk.body(12))
-                    .foregroundStyle(SumiInk.inkMuted)
-                    .padding(.vertical, 6)
             } else {
-                VStack(spacing: 6) {
-                    ForEach(snapshot.habits) { habit in
-                        HStack(spacing: 8) {
-                            Text(habit.title)
-                                .font(SumiInk.body(13))
-                                .foregroundStyle(SumiInk.ink)
-                            Spacer()
-                            Text(habit.formattedReward)
-                                .font(SumiInk.caption(11))
-                                .monospacedDigit()
-                                .foregroundStyle(SumiInk.seal)
-                            Text("· Max \(habit.dailyFrequencyLimit)x/day")
-                                .font(SumiInk.caption(10))
-                                .foregroundStyle(SumiInk.inkMuted)
-                            Button("DELETE") {
-                                onDeleteHabit?(habit.id)
-                            }
-                            .buttonStyle(SumiInkGhostButton())
-                            .disabled(isLocked)
-                            .opacity(isLocked ? 0.5 : 1.0)
+                registerRow(
+                    label: "DOMAINS",
+                    value: snapshot.blocklistRules.isEmpty ? "default catalog" : snapshot.blocklistRules.map(\.suffix).joined(separator: "  ·  "),
+                    note: snapshot.blocklistRules.isEmpty ? "no custom suffixes" : "\(snapshot.blocklistRules.count) recorded"
+                )
+            }
+
+            if snapshot.security.isUnlocked && !configurationLocked {
+                ForEach(snapshot.blocklistRules) { rule in
+                    registerRow(label: "", value: rule.suffix, note: "custom") {
+                        Button("REMOVE") {
+                            onRemoveBlocklistRule?(rule.suffix)
                         }
-                        .padding(8)
-                        .background(SumiInk.paperSoft)
-                        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+                        .buttonStyle(SumiInkGhostButton())
                     }
                 }
             }
         }
-        .padding(16)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
-    private var readOnlySettingsPreview: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                Text("CURRENT CONFIGURATION (READ-ONLY)")
-                    .font(SumiInk.caption(10))
-                    .tracking(1.8)
-                    .foregroundStyle(SumiInk.inkMuted)
-                Spacer()
-                Text("LOCKED · 2FA REQUIRED TO EDIT")
-                    .font(SumiInk.caption(9))
-                    .tracking(1.2)
-                    .foregroundStyle(SumiInk.seal)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(SumiInk.sealWash)
-            }
-
-            VStack(alignment: .leading, spacing: 8) {
-                Text("AMENITY PRICES")
-                    .font(SumiInk.caption(9))
-                    .tracking(1.4)
-                    .foregroundStyle(SumiInk.inkMuted)
-
-                ForEach(AmenityKind.allCases, id: \.self) { kind in
-                    let current = snapshot.currentCost(for: kind)
-                    let isOverridden = snapshot.isPriceOverridden(for: kind)
-                    HStack {
-                        Text(kind.sealGlyph)
-                            .font(.system(size: 11, weight: .bold, design: .serif))
-                            .foregroundStyle(Color.white)
-                            .frame(width: 20, height: 20)
-                            .background(isOverridden ? SumiInk.seal : SumiInk.ink)
-                        Text(kind.displayName)
-                            .font(SumiInk.body(12))
-                        Spacer()
-                        Text("\(CreditMath.displayString(current)) credits")
-                            .font(SumiInk.body(12))
-                            .monospacedDigit()
-                            .foregroundStyle(isOverridden ? SumiInk.seal : SumiInk.ink)
-                    }
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
-                    .background(SumiInk.paperSoft)
-                }
-            }
-
-            if !snapshot.blocklistRules.isEmpty {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("CUSTOM BLOCKED DOMAINS")
-                        .font(SumiInk.caption(9))
-                        .tracking(1.4)
-                        .foregroundStyle(SumiInk.inkMuted)
-
-                    ForEach(snapshot.blocklistRules) { rule in
-                        HStack {
-                            Text("●")
-                                .font(.system(size: 7))
-                                .foregroundStyle(SumiInk.seal)
-                            Text(rule.suffix)
-                                .font(SumiInk.body(12))
-                            Spacer()
+    private var habitRegister: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            if snapshot.security.isUnlocked && !configurationLocked {
+                registerRow(
+                    label: "HABITS",
+                    value: snapshot.habits.isEmpty ? "starter catalog" : "\(snapshot.habits.count) listed",
+                    note: "daily discipline"
+                ) {
+                    HStack(spacing: 8) {
+                        TextField("Habit title", text: $newHabitTitle)
+                            .textFieldStyle(.plain)
+                            .font(SumiInk.body(13))
+                            .padding(6)
+                            .frame(width: 180)
+                            .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+                        Picker("Reward", selection: $newHabitReward) {
+                            Text("+0.25c").tag(0.25)
+                            Text("+0.50c").tag(0.50)
+                            Text("+0.75c").tag(0.75)
+                            Text("+1.00c").tag(1.00)
                         }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(SumiInk.paperSoft)
+                        .frame(width: 90)
+                        Picker("Daily", selection: $newHabitFreq) {
+                            Text("1x").tag(1)
+                            Text("2x").tag(2)
+                            Text("3x").tag(3)
+                            Text("4x").tag(4)
+                            Text("5x").tag(5)
+                        }
+                        .frame(width: 70)
+                        Button("CREATE") {
+                            let title = newHabitTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !title.isEmpty {
+                                onCreateHabit?(title, newHabitReward, newHabitFreq)
+                                newHabitTitle = ""
+                            }
+                        }
+                        .buttonStyle(SumiInkSealButton())
+                        .disabled(newHabitTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                     }
                 }
+                ForEach(snapshot.habits) { habit in
+                    registerRow(
+                        label: "",
+                        value: habit.title,
+                        note: "\(habit.formattedReward)  ·  \(habit.dailyFrequencyLimit)x/day"
+                    ) {
+                        Button("DELETE") {
+                            onDeleteHabit?(habit.id)
+                        }
+                        .buttonStyle(SumiInkGhostButton())
+                    }
+                }
+            } else {
+                registerRow(
+                    label: "HABITS",
+                    value: snapshot.habits.isEmpty ? "starter catalog" : snapshot.habits.map(\.title).joined(separator: "  ·  "),
+                    note: snapshot.habits.isEmpty
+                        ? "default daily tasks"
+                        : snapshot.habits.map { "\($0.formattedReward) · \($0.dailyFrequencyLimit)x" }.joined(separator: "   ")
+                )
             }
         }
-        .padding(16)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
     private func clearSecrets() {
@@ -1198,74 +970,50 @@ public struct CommandDashboardView: View {
         totp = ""
     }
 
-    private var governanceCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("48-HOUR GOVERNANCE")
-                .font(SumiInk.caption(10))
-                .tracking(1.8)
-                .foregroundStyle(SumiInk.inkMuted)
-            Text(snapshot.governance.bannerCaption)
-                .font(SumiInk.body(14))
-                .foregroundStyle(SumiInk.ink)
-            Text(snapshot.governance.remainingCaption)
-                .font(SumiInk.display(28))
-                .monospacedDigit()
-                .foregroundStyle(SumiInk.seal)
-
-            if snapshot.governance.isBypassEnabled {
-                Text("PRE-PRODUCTION OVERRIDE ACTIVE (PRD #45)\nSettings can be freely adjusted without cooldown lockout.")
-                    .font(SumiInk.body(11))
-                    .foregroundStyle(SumiInk.inkMuted)
-            }
-
+    private var cooldownRegister: some View {
+        registerRow(
+            label: "COOLDOWN",
+            value: snapshot.governance.remainingCaption,
+            note: snapshot.governance.bannerCaption
+        ) {
             if snapshot.security.isUnlocked {
-                VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
                     if snapshot.governance.isLocked {
-                        Button("RESET 48H COOLDOWN") {
+                        Button("RESET") {
                             onResetLock?()
                         }
                         .buttonStyle(SumiInkSealButton())
                     }
-
                     if snapshot.governance.isBypassEnabled {
-                        Button("DISABLE BYPASS (STRICT)") {
+                        Button("STRICT") {
                             onToggleCooldownBypass?()
                         }
                         .buttonStyle(SumiInkGhostButton())
                     } else {
-                        Button("BYPASS 48H LOCK (TESTING)") {
+                        Button("BYPASS") {
                             onToggleCooldownBypass?()
                         }
-                        .buttonStyle(SumiInkSealButton())
+                        .buttonStyle(SumiInkGhostButton())
                     }
                 }
-                .padding(.top, 4)
+            } else {
+                EmptyView()
             }
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
-        .background(SumiInk.sealWash.opacity(0.65))
     }
 
-    private var emergencyCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("EMERGENCY SAFETY VALVE")
-                .font(SumiInk.caption(10))
-                .tracking(1.8)
-                .foregroundStyle(SumiInk.inkMuted)
-            Text(snapshot.emergencyValveCaption)
-                .font(SumiInk.body(14))
-            Text("Pending debt  \(snapshot.formattedEmergencyDebt)")
-                .font(SumiInk.body(13))
-                .foregroundStyle(SumiInk.inkMuted)
+    private var emergencyRegister: some View {
+        registerRow(
+            label: "EMERGENCY",
+            value: snapshot.formattedEmergencyDebt,
+            note: snapshot.emergencyValveActive
+                ? "30m release active"
+                : snapshot.emergencyValveCaption
+        ) {
             if snapshot.emergencyValveActive {
-                Text("EMERGENCY OVERRIDE ENGAGED (30m release active)")
-                    .font(SumiInk.caption(10))
-                    .tracking(1.4)
-                    .foregroundStyle(SumiInk.seal)
+                EmptyView()
             } else {
-                Button("ENGAGE EMERGENCY VALVE (30m)") {
+                Button("ENGAGE (30m)") {
                     showingEmergencyConfirmation = true
                 }
                 .buttonStyle(SumiInkGhostButton())
@@ -1279,53 +1027,27 @@ public struct CommandDashboardView: View {
                 }
             }
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
     private var sentinelStatusCaption: String {
         DaemonServiceRegistrar.statusCaption(sentinelStatus)
     }
 
-    private var sentinelCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("SENTINEL DAEMON")
-                    .font(SumiInk.caption(10))
-                    .tracking(1.8)
-                    .foregroundStyle(SumiInk.inkMuted)
-                Spacer()
-                Text(sentinelStatusCaption)
-                    .font(SumiInk.caption(9))
-                    .tracking(1.2)
-                    .foregroundStyle(sentinelStatus == .enabled ? SumiInk.ink : SumiInk.seal)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(sentinelStatus == .enabled ? SumiInk.paperSoft : SumiInk.sealWash)
-            }
-            Text("Hard lockdown privileged sentinel supervising unauthorized gaming executables and network socket filters.")
-                .font(SumiInk.body(12))
-                .foregroundStyle(SumiInk.inkMuted)
+    private var sentinelRegister: some View {
+        registerRow(
+            label: "SENTINEL",
+            value: sentinelStatusCaption,
+            note: sentinelError.isEmpty ? "process and socket filter" : sentinelError
+        ) {
             if sentinelStatus != .enabled {
-                Button("REGISTER SENTINEL DAEMON") {
+                Button("REGISTER") {
                     registerSentinelDaemon()
                 }
                 .buttonStyle(SumiInkGhostButton())
-                if !sentinelError.isEmpty {
-                    Text(sentinelError)
-                        .font(SumiInk.caption(10))
-                        .foregroundStyle(SumiInk.seal)
-                }
             } else {
-                Text("Daemon actively supervised by macOS launchd.")
-                    .font(SumiInk.caption(10))
-                    .foregroundStyle(SumiInk.inkMuted)
+                EmptyView()
             }
         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
     }
 
     private func registerSentinelDaemon() {
@@ -1344,17 +1066,6 @@ public struct CommandDashboardView: View {
             manager: contentFilterManager,
             onActivate: onActivateContentFilter
         )
-    }
-
-    private func labeledValue(_ label: String, _ value: String) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(label.uppercased())
-                .font(SumiInk.caption(9))
-                .tracking(1.6)
-                .foregroundStyle(SumiInk.inkMuted)
-            Text(value)
-                .font(SumiInk.body(14))
-        }
     }
 
     private func signedAmount(_ amount: Double) -> String {
@@ -1409,47 +1120,51 @@ private struct SumiInkGhostButton: ButtonStyle {
          manager.errorMessage
      }
  
-     public var body: some View {
-         VStack(alignment: .leading, spacing: 10) {
-             HStack {
-                 Text("NETWORK EXTENSION FILTER")
-                     .font(SumiInk.caption(10))
-                     .tracking(1.8)
-                     .foregroundStyle(SumiInk.inkMuted)
-                 Spacer()
-                 Text(status.caption)
-                     .font(SumiInk.caption(9))
-                     .tracking(1.2)
-                     .foregroundStyle(status == .enabled ? SumiInk.ink : (status == .pendingApproval ? SumiInk.inkMuted : SumiInk.seal))
-                     .padding(.horizontal, 6)
-                     .padding(.vertical, 2)
-                     .background(status == .enabled ? SumiInk.paperSoft : (status == .pendingApproval ? SumiInk.paperSoft.opacity(0.8) : SumiInk.sealWash))
-             }
-             Text("Root socket filter provider restricting unverified UDP/QUIC and blacklisted web domains.")
-                 .font(SumiInk.body(12))
-                 .foregroundStyle(SumiInk.inkMuted)
-             if status != .enabled {
-                 Button(status == .pendingApproval ? "PROMPT FILTER AUTHORIZATION" : "ACTIVATE CONTENT FILTER") {
-                     manager.requestActivation()
-                     onActivate?()
-                 }
-                 .buttonStyle(SumiInkGhostButton())
-                 if !errorMessage.isEmpty {
-                     Text(errorMessage)
-                         .font(SumiInk.caption(10))
-                         .foregroundStyle(SumiInk.seal)
-                 }
-             } else {
-                 Text("Network socket filter actively filtering inspected traffic.")
-                     .font(SumiInk.caption(10))
-                     .foregroundStyle(SumiInk.inkMuted)
-             }
-         }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+    public var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 18) {
+            Text("FILTER")
+                .font(SumiInk.caption(10))
+                .tracking(1.8)
+                .foregroundStyle(SumiInk.inkMuted)
+                .frame(width: 88, alignment: .leading)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(status.caption)
+                    .font(SumiInk.display(22))
+                    .foregroundStyle(status == .failed ? SumiInk.seal : SumiInk.ink)
+                Text(note)
+                    .font(SumiInk.body(12))
+                    .foregroundStyle(errorMessage.isEmpty ? SumiInk.inkMuted : SumiInk.seal)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 12)
+            if status != .enabled {
+                Button(status == .pendingApproval ? "PROMPT" : "ACTIVATE") {
+                    manager.requestActivation()
+                    onActivate?()
+                }
+                .buttonStyle(SumiInkGhostButton())
+            }
+        }
+        .padding(.vertical, 14)
+        .overlay(alignment: .bottom) { Rectangle().fill(SumiInk.rule.opacity(0.7)).frame(height: 1) }
         .onAppear {
             manager.refreshStatus()
+        }
+    }
+
+    private var note: String {
+        if !errorMessage.isEmpty {
+            return errorMessage
+        }
+        switch status {
+        case .enabled:
+            return "socket filter active"
+        case .pendingApproval:
+            return "approve in System Settings"
+        case .failed:
+            return "activation failed"
+        case .disabled:
+            return "socket filter not configured"
         }
     }
 }
