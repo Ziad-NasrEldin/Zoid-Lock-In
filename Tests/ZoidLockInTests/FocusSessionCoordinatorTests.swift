@@ -75,5 +75,9 @@ struct FocusSessionCoordinatorTests {
         #expect(ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.openai.chat"))
         #expect(ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.todesktop.230313mzl4w4u92"))
         #expect(!ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.apple.Music"))
+        #expect(!ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.apple.Safari"))
+        #expect(ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.apple.Safari", domain: "github.com"))
+        #expect(!ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.apple.Safari", domain: "youtube.com"))
+        #expect(!ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.tinyspeck.slackmacgap"))
     }
 }

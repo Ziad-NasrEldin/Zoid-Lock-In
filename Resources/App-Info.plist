@@ -24,6 +24,8 @@
     <true/>
     <key>NSSupportsAutomaticGraphicsSwitching</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Zoid Lock In reads the frontmost browser tab so work websites categorized in Zoid 0 can mint focus credits.</string>
     <key>LSUIElement</key>
     <false/>
 </dict>

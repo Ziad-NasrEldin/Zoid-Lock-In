@@ -9,11 +9,21 @@ public struct TrackedAppIdentity: Sendable, Equatable, Hashable {
     public let bundleIdentifier: String
     public let displayName: String
     public let isProductive: Bool
+    public let domain: String?
+    public let category: ZoidZeroActivityCategory
 
-    public init(bundleIdentifier: String, displayName: String, isProductive: Bool) {
+    public init(
+        bundleIdentifier: String,
+        displayName: String,
+        isProductive: Bool,
+        domain: String? = nil,
+        category: ZoidZeroActivityCategory = .uncategorized
+    ) {
         self.bundleIdentifier = bundleIdentifier
         self.displayName = displayName
         self.isProductive = isProductive
+        self.domain = domain
+        self.category = category
     }
 }
 
@@ -27,9 +37,9 @@ public enum TrackingPauseReason: String, Sendable, Equatable {
 
 /// Zoid 0 live application and anti-idle activity tracker.
 ///
-/// Ported directly from Zoid 0's ApplicationActivityMonitor and UserInputIdleDetector,
-/// tracking frontmost window changes, system sleep/wake, display lock/unlock,
-/// and physical HID events.
+/// Productive focus follows Zoid 0's categorized catalog: work apps and work
+/// websites mint credits. Browsers only count when the active tab is work.
+/// User recategorizations in Zoid 0's store.json are reloaded live.
 public final class ZoidZeroLiveTracker: @unchecked Sendable {
     private static let logger = Logger(
         subsystem: "com.mavoid.zoidlockin",
@@ -38,28 +48,17 @@ public final class ZoidZeroLiveTracker: @unchecked Sendable {
 
     public static let shared = ZoidZeroLiveTracker()
 
-    /// Whitelist of productive bundle identifiers adapted from Zoid 0 & Zoid Lock In.
-    public static let defaultProductiveBundlePrefixes: Set<String> = [
-        "com.apple.dt.Xcode",
-        "com.todesktop.230313mzl4w4u92", // Cursor
-        "com.microsoft.VSCode",
-        "com.apple.Terminal",
-        "com.googlecode.iterm2",
-        "dev.warp.Warp-Stable",
-        "net.kovidgoyal.kitty",
-        "io.alacritty",
-        "com.sublimetext",
-        "md.obsidian",
-        "notion.id",
-        "com.linear",
-        "com.figma.Desktop",
-        "com.github.GitHubClient",
-        "com.fournova.Tower",
-        "com.tinyspeck.slackmacgap",
-        "com.microsoft.teams2",
-        "com.openai.chat",
-        "com.openai.codex"
-    ]
+    /// Compatibility surface: work-app prefixes derived from the Zoid 0 catalog.
+    public static var defaultProductiveBundlePrefixes: Set<String> {
+        var prefixes = ZoidZeroActivityCatalog.lockInWorkBundlePrefixes
+        for (subject, category) in ZoidZeroActivityCatalog.defaultAssignments {
+            guard category.isProductive else { continue }
+            if case .application(let bundle) = subject {
+                prefixes.insert(bundle)
+            }
+        }
+        return prefixes
+    }
 
     private let lock = NSLock()
     private var workspaceObservers: [NSObjectProtocol] = []
@@ -69,14 +68,19 @@ public final class ZoidZeroLiveTracker: @unchecked Sendable {
     private var currentApp: TrackedAppIdentity?
     private var activePauseReasons: Set<TrackingPauseReason> = []
     private let idleThreshold: TimeInterval
+    private let catalog: ZoidZeroActivityCatalog
     private let anyInputEventType = CGEventType(rawValue: UInt32.max)!
 
     /// Callback invoked when the productive state changes.
     /// isProductiveAndActive is true when frontmost is a productive app AND user is not idle/locked/sleeping.
     public var onProductiveStateChanged: (@Sendable (_ isProductiveAndActive: Bool, _ app: TrackedAppIdentity?) -> Void)?
 
-    public init(idleThreshold: TimeInterval = 90) {
+    public init(
+        idleThreshold: TimeInterval = 90,
+        catalog: ZoidZeroActivityCatalog = .shared
+    ) {
         self.idleThreshold = idleThreshold
+        self.catalog = catalog
     }
 
     public var currentFrontmost: TrackedAppIdentity? {
@@ -197,6 +201,7 @@ public final class ZoidZeroLiveTracker: @unchecked Sendable {
         timer.schedule(deadline: .now() + 5, repeating: 5, leeway: .milliseconds(500))
         timer.setEventHandler { [weak self] in
             self?.checkIdleDuration()
+            self?.refreshFrontmostClassification()
         }
         lock.lock()
         idleCheckTimer = timer
@@ -217,17 +222,30 @@ public final class ZoidZeroLiveTracker: @unchecked Sendable {
         CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInputEventType)
     }
 
+    private func refreshFrontmostClassification() {
+        catalog.reloadIfNeeded()
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        handleApplicationActivation(app)
+    }
+
     private func handleApplicationActivation(_ app: NSRunningApplication) {
         let bundleId = app.bundleIdentifier ?? ""
         let name = app.localizedName ?? "Unknown"
-        let isProductive = Self.isProductive(bundleIdentifier: bundleId)
+        let domain = Self.frontmostBrowserDomain(bundleIdentifier: bundleId)
+        let category = catalog.isBrowser(bundleId)
+            ? catalog.category(for: .website(domain: domain ?? ""))
+            : catalog.category(for: .application(bundleIdentifier: bundleId))
+        let isProductive = catalog.isProductive(bundleIdentifier: bundleId, domain: domain)
         let identity = TrackedAppIdentity(
             bundleIdentifier: bundleId,
             displayName: name,
-            isProductive: isProductive
+            isProductive: isProductive,
+            domain: domain,
+            category: category
         )
 
         lock.lock()
+        let previous = currentApp
         currentApp = identity
         if !isProductive {
             activePauseReasons.insert(.nonProductiveApp)
@@ -235,10 +253,13 @@ public final class ZoidZeroLiveTracker: @unchecked Sendable {
             activePauseReasons.remove(.nonProductiveApp)
         }
         let productiveAndActive = isProductive && activePauseReasons.isEmpty
+        let changed = previous != identity
         let callback = onProductiveStateChanged
         lock.unlock()
 
-        callback?(productiveAndActive, identity)
+        if changed {
+            callback?(productiveAndActive, identity)
+        }
     }
 
     private func pause(reason: TrackingPauseReason) {
@@ -267,13 +288,31 @@ public final class ZoidZeroLiveTracker: @unchecked Sendable {
         }
     }
 
-    public static func isProductive(bundleIdentifier: String) -> Bool {
-        guard !bundleIdentifier.isEmpty else { return false }
-        for prefix in defaultProductiveBundlePrefixes {
-            if bundleIdentifier.hasPrefix(prefix) {
-                return true
-            }
+    public static func isProductive(bundleIdentifier: String, domain: String? = nil) -> Bool {
+        ZoidZeroActivityCatalog.shared.isProductive(
+            bundleIdentifier: bundleIdentifier,
+            domain: domain
+        )
+    }
+
+    public static func frontmostBrowserDomain(bundleIdentifier: String) -> String? {
+        let source: String
+        if bundleIdentifier.hasPrefix("com.apple.Safari") {
+            source = "tell application id \"com.apple.Safari\" to get URL of current tab of front window"
+        } else if bundleIdentifier.hasPrefix("com.google.Chrome") {
+            source = "tell application id \"com.google.Chrome\" to get URL of active tab of front window"
+        } else if bundleIdentifier.hasPrefix("company.thebrowser.Browser") {
+            source = "tell application id \"company.thebrowser.Browser\" to get URL of active tab of front window"
+        } else {
+            return nil
         }
-        return false
+
+        var error: NSDictionary?
+        let script = NSAppleScript(source: source)
+        let result = script?.executeAndReturnError(&error)
+        guard error == nil, let url = result?.stringValue else {
+            return nil
+        }
+        return ZoidZeroActivityCatalog.normalizedDomain(from: url)
     }
 }
