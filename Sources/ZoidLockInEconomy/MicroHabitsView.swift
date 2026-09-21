@@ -6,6 +6,7 @@ public struct MicroHabitsPopoverView: View {
     public var snapshot: MicroHabitsSnapshot
     public var onComplete: ((UUID) -> Void)?
     public var onCreate: ((String, Double, Int) -> Void)?
+    public var onDelete: ((UUID) -> Void)?
 
     @State private var draftTitle = ""
     @State private var draftReward = HabitCreditMinting.defaultReward
@@ -14,11 +15,13 @@ public struct MicroHabitsPopoverView: View {
     public init(
         snapshot: MicroHabitsSnapshot,
         onComplete: ((UUID) -> Void)? = nil,
-        onCreate: ((String, Double, Int) -> Void)? = nil
+        onCreate: ((String, Double, Int) -> Void)? = nil,
+        onDelete: ((UUID) -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.onComplete = onComplete
         self.onCreate = onCreate
+        self.onDelete = onDelete
     }
 
     public var body: some View {
@@ -145,10 +148,13 @@ public struct MicroHabitsPopoverView: View {
                 ForEach(snapshot.habits) { habit in
                     MicroHabitRow(
                         habit: habit,
-                        isDisabled: !habit.canComplete
-                    ) {
-                        onComplete?(habit.id)
-                    }
+                        isDisabled: !habit.canComplete,
+                        isEditorLocked: snapshot.editorIsLocked,
+                        onComplete: {
+                            onComplete?(habit.id)
+                        },
+                        onDelete: onDelete.map { del in { del(habit.id) } }
+                    )
                 }
             }
         }
@@ -208,16 +214,25 @@ public struct MicroHabitsPopoverView: View {
             .allowsHitTesting(snapshot.editorAllowsHitTesting)
             .opacity(snapshot.editorFieldOpacity)
 
-            HStack(spacing: 8) {
-                Text("FREQUENCY")
+            HStack(spacing: 6) {
+                Text("FREQ")
                     .font(SumiInk.caption(9))
                     .tracking(1.4)
                     .foregroundStyle(SumiInk.inkMuted)
-                editorChip("1 / DAY", selected: draftFrequency == 1) {
+                editorChip("1x", selected: draftFrequency == 1) {
                     draftFrequency = 1
                 }
-                editorChip("2 / DAY", selected: draftFrequency == 2) {
+                editorChip("2x", selected: draftFrequency == 2) {
                     draftFrequency = 2
+                }
+                editorChip("3x", selected: draftFrequency == 3) {
+                    draftFrequency = 3
+                }
+                editorChip("4x", selected: draftFrequency == 4) {
+                    draftFrequency = 4
+                }
+                editorChip("5x", selected: draftFrequency == 5) {
+                    draftFrequency = 5
                 }
                 Spacer()
                 Button {
@@ -307,7 +322,9 @@ public struct MicroHabitsPopoverView: View {
 struct MicroHabitRow: View {
     var habit: MicroHabitRowSnapshot
     var isDisabled: Bool
+    var isEditorLocked: Bool = true
     var onComplete: () -> Void
+    var onDelete: (() -> Void)? = nil
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -348,6 +365,20 @@ struct MicroHabitRow: View {
                 .font(SumiInk.caption(10))
                 .tracking(1.0)
                 .foregroundStyle(habit.canComplete ? SumiInk.inkMuted : SumiInk.seal)
+
+            if !isEditorLocked, let onDelete {
+                Button(action: onDelete) {
+                    Text("×")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(SumiInk.seal)
+                        .frame(width: 18, height: 18)
+                        .background(SumiInk.sealWash)
+                        .overlay(Rectangle().stroke(SumiInk.seal.opacity(0.4), lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Delete \(habit.title)")
+                .accessibilityIdentifier("habit-delete-\(habit.id.uuidString)")
+            }
         }
         .padding(.vertical, 5)
         .opacity(habit.isEnabled ? 1 : 0.62)

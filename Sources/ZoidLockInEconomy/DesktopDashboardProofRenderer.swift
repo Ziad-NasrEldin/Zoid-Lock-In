@@ -35,6 +35,7 @@ public enum DesktopDashboardProofRenderer: Sendable {
     public static func renderPNG(
         snapshot: CommandDashboardSnapshot = .proof,
         to url: URL = defaultProofURL,
+        size: CGSize = canvasSize,
         scale: CGFloat = defaultScale
     ) throws {
         let app = NSApplication.shared
@@ -43,11 +44,11 @@ public enum DesktopDashboardProofRenderer: Sendable {
         let view = CommandDashboardView(snapshot: snapshot)
         let hosting = NSHostingView(rootView: view)
         hosting.appearance = NSAppearance(named: .aqua)
-        hosting.frame = NSRect(origin: .zero, size: canvasSize)
+        hosting.frame = NSRect(origin: .zero, size: size)
         hosting.layoutSubtreeIfNeeded()
 
-        let pixelsWide = Int((canvasSize.width * scale).rounded())
-        let pixelsHigh = Int((canvasSize.height * scale).rounded())
+        let pixelsWide = Int((size.width * scale).rounded())
+        let pixelsHigh = Int((size.height * scale).rounded())
         guard let bitmap = NSBitmapImageRep(
             bitmapDataPlanes: nil,
             pixelsWide: pixelsWide,
@@ -62,7 +63,7 @@ public enum DesktopDashboardProofRenderer: Sendable {
         ) else {
             throw DesktopDashboardProofError.renderFailed
         }
-        bitmap.size = canvasSize
+        bitmap.size = size
         hosting.cacheDisplay(in: hosting.bounds, to: bitmap)
 
         guard let png = bitmap.representation(using: .png, properties: [:]) else {
@@ -85,6 +86,11 @@ public enum DesktopDashboardProofRenderer: Sendable {
         var settingsSnap = CommandDashboardSnapshot.proof
         settingsSnap.selectedTab = .settings
         settingsSnap.security = .unlockedProof
-        try renderPNG(snapshot: settingsSnap, to: settingsProofURL, scale: scale)
+        try renderPNG(
+            snapshot: settingsSnap,
+            to: settingsProofURL,
+            size: CGSize(width: 1200, height: 1400),
+            scale: scale
+        )
     }
 }
