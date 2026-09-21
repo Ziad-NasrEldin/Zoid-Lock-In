@@ -37,7 +37,7 @@ public struct RedemptionJournalEntry: Sendable, Equatable, Codable {
     }
 
     public func isRestorable(bootUUID: String, at time: TimeInterval) -> Bool {
-        self.bootUUID == bootUUID && remainingSeconds(at: time) > 0
+        BootSession.isSameBoot(self.bootUUID, bootUUID) && remainingSeconds(at: time) > 0
     }
 }
 

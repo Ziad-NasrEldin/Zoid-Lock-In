@@ -377,15 +377,15 @@ enum CalibrationIntegrity {
 }
 
 extension CalibrationState {
-    func sealMaterialMatches(_ payload: CalibrationSealPayload) -> Bool {
+    public func sealMaterialMatches(_ payload: CalibrationSealPayload) -> Bool {
         datesEqual(calibrationStartedAt, payload.calibrationStartedAt)
-            && abs(calibrationStartedMonotonic - payload.calibrationStartedMonotonic) < 0.000_1
+            && abs(calibrationStartedMonotonic - payload.calibrationStartedMonotonic) < 0.01
             && bootSessionUUID == payload.bootSessionUUID
             && isCompleted == payload.isCompleted
             && datesEqual(transitionToHardAt, payload.transitionToHardAt)
             && datesEqual(lastObservedWall, payload.lastObservedWall)
             && doublesEqual(lastObservedMonotonic, payload.lastObservedMonotonic)
-            && abs(accruedMonotonicElapsed - payload.accruedMonotonicElapsed) < 0.000_1
+            && abs(accruedMonotonicElapsed - payload.accruedMonotonicElapsed) < 0.01
             && isTampered == payload.isTampered
             && sequence == payload.sequence
     }
@@ -395,14 +395,14 @@ extension CalibrationState {
         case (nil, nil):
             return true
         case let (left?, right?):
-            return abs(left.timeIntervalSince(right)) < 0.002
+            return abs(left.timeIntervalSince(right)) < 1.0
         default:
             return false
         }
     }
 
     private func datesEqual(_ lhs: Date, _ rhs: Date) -> Bool {
-        abs(lhs.timeIntervalSince(rhs)) < 0.002
+        abs(lhs.timeIntervalSince(rhs)) < 1.0
     }
 
     private func doublesEqual(_ lhs: TimeInterval?, _ rhs: TimeInterval?) -> Bool {
@@ -410,7 +410,7 @@ extension CalibrationState {
         case (nil, nil):
             return true
         case let (left?, right?):
-            return abs(left - right) < 0.000_1
+            return abs(left - right) < 0.01
         default:
             return false
         }

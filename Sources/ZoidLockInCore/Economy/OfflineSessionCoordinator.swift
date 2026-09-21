@@ -109,7 +109,7 @@ public final class OfflineSessionCoordinator: @unchecked Sendable {
                 lastError = OfflineMeetingError.notRecording.localizedDescription
                 throw OfflineMeetingError.notRecording
             }
-            guard record.bootSessionUUID == bootSessionUUID else {
+            guard BootSession.isSameBoot(record.bootSessionUUID, bootSessionUUID) else {
                 lastError = OfflineMeetingError.bootSessionChanged.localizedDescription
                 throw OfflineMeetingError.bootSessionChanged
             }

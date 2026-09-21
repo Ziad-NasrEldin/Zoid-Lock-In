@@ -376,6 +376,41 @@ struct Slice6AdversarialHardeningTests {
         #expect(overMax.coordinator.snapshot().phase == .recording)
     }
 
+    @Test("unknown boot UUID cannot punch out a persisted recording")
+    func unknownBootCannotPunchOut() throws {
+        let store = InMemoryOfflineMeetingStore()
+        let artifacts = MeetingArtifactStore(rootURL: MeetingArtifactLocation.makeIsolatedRoot())
+        let wall = ManualWallClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let original = OfflineSessionCoordinator(
+            store: store,
+            artifacts: artifacts,
+            clock: ManualMonotonicClock(startingAt: 10),
+            uptimeClock: ManualMonotonicClock(startingAt: 10),
+            wallClock: wall,
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            bootSessionUUID: BootSession.unknownUUID
+        )
+        try original.punchIn()
+        #expect(original.snapshot().canAbandon)
+
+        let resumed = OfflineSessionCoordinator(
+            store: store,
+            artifacts: artifacts,
+            clock: ManualMonotonicClock(startingAt: 10 + OfflineMeetingPolicy.minimumDuration),
+            uptimeClock: ManualMonotonicClock(startingAt: 10 + OfflineMeetingPolicy.minimumDuration),
+            wallClock: wall,
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            bootSessionUUID: BootSession.unknownUUID
+        )
+        do {
+            _ = try resumed.punchOut()
+            Issue.record("unknown boot punch-out must fail")
+        } catch let error as OfflineMeetingError {
+            #expect(error == .bootSessionChanged)
+        }
+        #expect(resumed.snapshot().canAbandon)
+    }
+
     @Test("submit re-hashes artifacts and refuses a swapped photo")
     func submitRehashDetectsTOCTOU() throws {
         let harness = MeetingHardeningHarness()

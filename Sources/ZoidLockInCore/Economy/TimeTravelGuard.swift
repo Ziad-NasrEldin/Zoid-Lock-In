@@ -75,10 +75,20 @@ public final class TimeTravelGuard: @unchecked Sendable {
         }
     }
 
-    /// Restores a persisted tamper bit. Once set, the flag never clears.
+    /// Restores a persisted tamper bit.
     public func markTampered() {
         lock.lock()
         tampered = true
+        lock.unlock()
+    }
+
+    /// Clears the tamper flag for authenticated administrative recovery.
+    public func clearTamper() {
+        lock.lock()
+        tampered = false
+        lastSkew = 0
+        originWall = nil
+        originMonotonic = nil
         lock.unlock()
     }
 }

@@ -30,6 +30,19 @@ extension SQLiteEconomicLedger: MicroHabitStoring {
         }
     }
 
+    public func deleteHabit(id: UUID) throws {
+        try performAtomically {
+            try database.execute(
+                "DELETE FROM micro_habit_completions WHERE habit_id = ?;",
+                [.text(id.uuidString)]
+            )
+            try database.execute(
+                "DELETE FROM micro_habits WHERE id = ?;",
+                [.text(id.uuidString)]
+            )
+        }
+    }
+
     public func habit(id: UUID) throws -> MicroHabit? {
         let rows = try database.query(
             Self.habitSelectSQL + " WHERE id = ?;",
@@ -150,7 +163,7 @@ extension SQLiteEconomicLedger: MicroHabitStoring {
             civilDate: civilDate,
             creditsAwarded: double(row["credits_awarded"]),
             createdAt: createdAt,
-            createdMonotonic: double(row["created_monotonic"])
+            createdMonotonic: rawDouble(row["created_monotonic"])
         )
     }
 }

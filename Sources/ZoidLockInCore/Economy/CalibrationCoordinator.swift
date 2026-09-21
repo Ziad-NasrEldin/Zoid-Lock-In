@@ -74,6 +74,23 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         policy.applying(calibrationMode: enforcementMode())
     }
 
+    public func resetTamperForAdmin() {
+        withLock {
+            failedClosed = false
+            timeTravel.clearTamper()
+            let nowWall = wallClock.now()
+            let nowMono = clock.nowSeconds()
+            if var state = try? verifiedStateLocked() {
+                state.isTampered = false
+                state.lastObservedWall = nowWall
+                state.lastObservedMonotonic = nowMono
+                state.bootSessionUUID = bootSessionUUID
+                try? persistStateLocked(state)
+            }
+            timeTravel.clearTamper()
+        }
+    }
+
     /// Pure transition rules. Tests use this seam without touching SQLite.
     public static func evaluate(
         state: CalibrationState,
@@ -159,7 +176,7 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         if state.isTampered {
             timeTravel.markTampered()
         }
-        guard state.bootSessionUUID == bootSessionUUID else {
+        guard BootSession.isSameBoot(state.bootSessionUUID, bootSessionUUID) else {
             return
         }
         let wall = state.lastObservedWall ?? state.calibrationStartedAt
@@ -248,7 +265,7 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         case .firstLaunch:
             return startWindowLocked(nowWall: nowWall, nowMono: nowMono)
         case .loaded(var existing):
-            if existing.bootSessionUUID != bootSessionUUID {
+            if !BootSession.isSameBoot(existing.bootSessionUUID, bootSessionUUID) {
                 existing.bootSessionUUID = bootSessionUUID
                 existing.lastObservedMonotonic = nowMono
                 existing.lastObservedWall = nowWall
@@ -308,7 +325,7 @@ public final class CalibrationCoordinator: @unchecked Sendable {
         nowMono: TimeInterval
     ) -> CalibrationState {
         var next = state
-        if next.bootSessionUUID != bootSessionUUID {
+        if !BootSession.isSameBoot(next.bootSessionUUID, bootSessionUUID) {
             next.bootSessionUUID = bootSessionUUID
             next.lastObservedMonotonic = nowMono
             next.lastObservedWall = nowWall

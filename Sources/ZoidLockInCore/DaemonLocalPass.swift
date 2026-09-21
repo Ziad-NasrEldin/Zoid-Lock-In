@@ -201,7 +201,8 @@ public struct DaemonPassController: Sendable, Equatable {
         bootSessionUUID: String,
         cooldownSeconds: TimeInterval = Self.emergencyCooldownSeconds
     ) -> TimeInterval {
-        if lastEmergencyBootSessionUUID == bootSessionUUID, let started = lastEmergencyStartedAt {
+        if BootSession.isSameBoot(lastEmergencyBootSessionUUID, bootSessionUUID),
+           let started = lastEmergencyStartedAt {
             return max(0, cooldownSeconds - (time - started))
         }
         if let utc = lastEmergencyUTC {

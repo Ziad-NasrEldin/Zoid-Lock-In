@@ -440,8 +440,8 @@ struct Slice8AdversarialHardeningTests {
             #expect(error == .invalidReward)
         }
         do {
-            _ = try harness.habits.createHabit(title: "OK", dailyFrequencyLimit: 3)
-            Issue.record("frequency 3 must fail")
+            _ = try harness.habits.createHabit(title: "OK", dailyFrequencyLimit: 6)
+            Issue.record("frequency 6 must fail")
         } catch let error as MicroHabitError {
             #expect(error == .invalidFrequency)
         }
@@ -492,6 +492,52 @@ struct Slice8AdversarialHardeningTests {
         #expect(governance.snapshot().isLocked)
     }
 
+    @Test("unknown boot UUID does not restore a stale governance monotonic origin")
+    func unknownBootDoesNotRestoreGovernanceOrigin() throws {
+        let store = InMemoryMicroHabitStore()
+        let first = HabitHarness(store: store, boot: BootSession.unknownUUID)
+        _ = try first.habits.createHabit(title: "Make Bed")
+        #expect(first.governance.snapshot().isLocked)
+        #expect(!first.governance.snapshot().isClockTampered)
+
+        let wall = ManualWallClock(first.wall.now().addingTimeInterval(GovernanceLockPolicy.cooldownSeconds + 60))
+        let mono = ManualMonotonicClock(startingAt: 0)
+        let timeTravel = TimeTravelGuard()
+        let engine = ExchangeEngine(
+            ledger: first.ledger,
+            clock: mono,
+            focusClock: mono,
+            wallClock: wall,
+            timeTravel: timeTravel,
+            timeZone: SliceTestCivil.timeZone
+        )
+        let governance = GovernanceLockCoordinator(
+            store: store,
+            clock: mono,
+            wallClock: wall,
+            timeTravel: timeTravel,
+            bootSessionUUID: BootSession.unknownUUID,
+            environment: [:],
+            keyProvider: first.keyProvider
+        )
+        let habits = MicroHabitCoordinator(
+            store: store,
+            engine: engine,
+            governance: governance,
+            wallClock: wall,
+            timeZone: SliceTestCivil.timeZone
+        )
+        do {
+            _ = try habits.createHabit(title: "Cheat")
+            Issue.record("unknown boot + wall advance must fail closed")
+        } catch is GovernanceLockError {
+            ()
+        }
+        let snap = governance.snapshot()
+        #expect(snap.isLocked)
+        #expect(!snap.isClockTampered)
+    }
+
     @Test("SQLite schema exposes micro_habits, completions, and governance_state")
     func sqliteTablesExist() throws {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
@@ -529,6 +575,94 @@ struct Slice8AdversarialHardeningTests {
         #expect(try ledger.loadGovernanceState().accruedMonotonicElapsed == 12)
         #expect(try ledger.loadAmenityPriceOverrides()[.food] == 1.0)
         #expect(try ledger.loadBlocklistRules().map(\.suffix) == ["example.com"])
+    }
+
+    @Test("daily frequency up to 5x is supported and tracks completions")
+    func dailyFrequencyUpToFive() throws {
+        let harness = HabitHarness(bypass: true)
+        let praying = try harness.habits.createHabit(
+            title: "Praying",
+            rewardCredits: 0.25,
+            dailyFrequencyLimit: 5
+        )
+        #expect(praying.dailyFrequencyLimit == 5)
+
+        for count in 1...5 {
+            let outcome = try harness.habits.complete(habitID: praying.id)
+            #expect(outcome.creditsMinted == 0.25)
+            #expect(try harness.store.completions(habitID: praying.id, on: harness.dayKey()).count == count)
+        }
+
+        do {
+            _ = try harness.habits.complete(habitID: praying.id)
+            Issue.record("sixth completion must fail daily frequency cap")
+        } catch let error as MicroHabitError {
+            #expect(error == .dailyFrequencyReached)
+        }
+    }
+
+    @Test("habit deletion removes habit from catalog and updates snapshot")
+    func habitDeletionAndGovernance() throws {
+        let harness = HabitHarness(bypass: true)
+        let habit = try harness.habits.createHabit(title: "Old Habit")
+        #expect(try harness.store.allHabits().count == 1)
+
+        try harness.habits.deleteHabit(id: habit.id)
+        #expect(try harness.store.allHabits().isEmpty)
+        #expect(try harness.store.habit(id: habit.id) == nil)
+
+        let snap = harness.habits.snapshot()
+        #expect(snap.habits.isEmpty)
+
+        do {
+            try harness.habits.deleteHabit(id: habit.id)
+            Issue.record("deleting nonexistent habit must fail")
+        } catch let error as MicroHabitError {
+            #expect(error == .habitNotFound)
+        }
+    }
+
+    @Test("habit deletion respects 48-hour cooldown lock")
+    func habitDeletionRespectsCooldown() throws {
+        let harness = HabitHarness(bypass: false)
+        let habit = try harness.habits.createHabit(title: "Locked Habit")
+        #expect(harness.governance.snapshot().isLocked)
+
+        do {
+            try harness.habits.deleteHabit(id: habit.id)
+            Issue.record("deletion during cooldown must fail")
+        } catch is GovernanceLockError {
+            ()
+        }
+
+        #expect(try harness.store.allHabits().count == 1)
+    }
+
+    @Test("SQLite habit deletion deletes habit and cascaded completions")
+    func sqliteHabitDeletion() throws {
+        let ledger = try SQLiteEconomicLedger(fileURL: EconomicLedgerLocation.makeIsolatedFileURL())
+        let habit = MicroHabit(
+            title: "Test Habit",
+            rewardCredits: 0.25,
+            dailyFrequencyLimit: 3,
+            createdAt: Date(),
+            updatedAt: Date()
+        )
+        try ledger.upsertHabit(habit)
+        #expect(try ledger.habit(id: habit.id) != nil)
+
+        let completion = MicroHabitCompletion(
+            habitID: habit.id,
+            civilDate: "2026-09-17",
+            creditsAwarded: 0.25,
+            createdAt: Date()
+        )
+        try ledger.insertCompletion(completion)
+        #expect(try ledger.allCompletions().count == 1)
+
+        try ledger.deleteHabit(id: habit.id)
+        #expect(try ledger.habit(id: habit.id) == nil)
+        #expect(try ledger.allCompletions().isEmpty)
     }
 }
 

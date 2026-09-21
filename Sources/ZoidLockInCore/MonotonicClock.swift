@@ -176,19 +176,37 @@ public final class ManualWallClock: WallClockProviding, @unchecked Sendable {
 /// Boot-session identity. Persisted passes (never used) and cooldown restoration
 /// compare this UUID so a reboot cannot resurrect a previous boot's monotonic timestamps.
 public enum BootSession: Sendable {
+    public static let unknownUUID = "unknown"
+
     public static func currentUUID() -> String {
         var size = 0
         guard sysctlbyname("kern.bootsessionuuid", nil, &size, nil, 0) == 0, size > 1 else {
-            return "unknown"
+            return unknownUUID
         }
 
         var buffer = [CChar](repeating: 0, count: size)
         guard sysctlbyname("kern.bootsessionuuid", &buffer, &size, nil, 0) == 0 else {
-            return "unknown"
+            return unknownUUID
         }
         return buffer.withUnsafeBufferPointer { pointer in
-            guard let base = pointer.baseAddress else { return "unknown" }
+            guard let base = pointer.baseAddress else { return unknownUUID }
             return String(cString: base)
         }
+    }
+
+    /// `kern.bootsessionuuid` can fail on Darwin and collapse to `"unknown"`.
+    /// That sentinel is not a stable boot identity, so two processes both
+    /// seeing it must not restore a previous boot's monotonic origin.
+    public static func isStableIdentity(_ uuid: String?) -> Bool {
+        guard let uuid else { return false }
+        let trimmed = uuid.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed.caseInsensitiveCompare(unknownUUID) != .orderedSame
+    }
+
+    public static func isSameBoot(_ lhs: String?, _ rhs: String?) -> Bool {
+        guard isStableIdentity(lhs), isStableIdentity(rhs), let lhs, let rhs else {
+            return false
+        }
+        return lhs == rhs
     }
 }

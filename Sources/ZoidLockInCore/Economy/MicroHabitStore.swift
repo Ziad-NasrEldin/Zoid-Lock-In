@@ -3,6 +3,7 @@ import Foundation
 /// Persistence seam for micro-habits and completions. SQLite lives in user space only.
 public protocol MicroHabitStoring: Sendable {
     func upsertHabit(_ habit: MicroHabit) throws
+    func deleteHabit(id: UUID) throws
     func habit(id: UUID) throws -> MicroHabit?
     func allHabits() throws -> [MicroHabit]
     func insertCompletion(_ completion: MicroHabitCompletion) throws
@@ -50,6 +51,13 @@ public final class InMemoryMicroHabitStore: MicroHabitStoring, GovernanceStoring
 
     public func upsertHabit(_ habit: MicroHabit) throws {
         withLock { habits[habit.id] = habit }
+    }
+
+    public func deleteHabit(id: UUID) throws {
+        withLock {
+            _ = habits.removeValue(forKey: id)
+            completions = completions.filter { $0.value.habitID != id }
+        }
     }
 
     public func habit(id: UUID) throws -> MicroHabit? {

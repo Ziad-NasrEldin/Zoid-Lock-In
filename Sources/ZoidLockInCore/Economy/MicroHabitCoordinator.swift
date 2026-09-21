@@ -117,6 +117,21 @@ public final class MicroHabitCoordinator: @unchecked Sendable {
         try updateHabit(id: id, isEnabled: isEnabled)
     }
 
+    public func deleteHabit(id: UUID) throws {
+        do {
+            try governance.performMutation {
+                guard try store.habit(id: id) != nil else {
+                    throw MicroHabitError.habitNotFound
+                }
+                try store.deleteHabit(id: id)
+            }
+            rememberSuccess()
+        } catch {
+            remember(error)
+            throw error
+        }
+    }
+
     @discardableResult
     public func complete(habitID: UUID, completionID: UUID = UUID()) throws -> HabitCompletionOutcome {
         do {
