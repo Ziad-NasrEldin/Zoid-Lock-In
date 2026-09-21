@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 import ZoidLockInCore
 import ZoidLockInEconomy
+import ZoidLockInFilterExtension
 import ZoidLockInIPC
 
 @main
@@ -231,10 +232,12 @@ private struct CommandDashboardContainer: View {
             },
             onCreateHabit: { title, reward, freq in
                 session.createHabit(title, reward: reward, frequency: freq)
-            }
+            },
+            contentFilterManager: session.contentFilterManager
         )
         .onAppear {
             NSApp.activate(ignoringOtherApps: true)
+            session.contentFilterManager.refreshStatus()
         }
     }
 }
@@ -256,6 +259,8 @@ final class MenuBarSession: ObservableObject {
     private let habitCoordinator: MicroHabitCoordinator
     private let habitGovernance: GovernanceLockCoordinator
     private let calibration: CalibrationCoordinator
+    private let focusCoordinator: FocusSessionCoordinator
+    let contentFilterManager: ContentFilterManager
     private let gatekeeper: SecurityGatekeeper
     private let ledger: SQLiteEconomicLedger
     private let incidentCache: CachedEmergencyIncidentStore
@@ -391,6 +396,12 @@ final class MenuBarSession: ObservableObject {
         self.habitCoordinator = habitCoordinator
         self.habitGovernance = habitGovernance
         self.calibration = calibration
+        let focusCoordinator = FocusSessionCoordinator(engine: engine, tracker: .shared)
+        focusCoordinator.start()
+        self.focusCoordinator = focusCoordinator
+        let filterManager = ContentFilterManager()
+        filterManager.refreshStatus()
+        self.contentFilterManager = filterManager
         self.gatekeeper = gatekeeper
         self.ledger = resolved
         self.incidentCache = cache
@@ -811,6 +822,7 @@ final class MenuBarSession: ObservableObject {
 
     deinit {
         timer?.cancel()
+        focusCoordinator.stop()
         client.invalidate()
     }
 }

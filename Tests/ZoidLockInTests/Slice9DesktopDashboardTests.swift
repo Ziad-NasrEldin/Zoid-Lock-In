@@ -460,12 +460,20 @@ struct Slice9DesktopDashboardTests {
         snapshot.amenityPrices[.food] = 3.5
         snapshot.blocklistRules = [BlocklistRule(suffix: "tiktok.com", createdAt: Date())]
 
+        let mockFilter = MockFilterManager()
+        let mockRequester = MockSystemExtensionRequester()
+        let filterManager = ContentFilterManager(
+            filterManager: mockFilter,
+            extensionRequester: mockRequester
+        )
+
         let view = CommandDashboardView(
             snapshot: snapshot,
             onUpdateAmenityPrice: { _, _ in },
             onAddBlocklistRule: { _ in },
             onRemoveBlocklistRule: { _ in },
-            onUpdateAlertRecipient: { _ in }
+            onUpdateAlertRecipient: { _ in },
+            contentFilterManager: filterManager
         )
 
         let hosting = NSHostingView(rootView: view)
@@ -490,7 +498,10 @@ struct Slice9DesktopDashboardTests {
         #expect((image?.size.width ?? 0) >= 1200)
         #expect((image?.size.height ?? 0) >= 800)
 
-        let view = CommandDashboardView(snapshot: .proof)
+        let view = CommandDashboardView(
+            snapshot: .proof,
+            contentFilterManager: ContentFilterManager.mockForTesting
+        )
         let hosting = NSHostingView(rootView: view)
         hosting.frame = NSRect(origin: .zero, size: CGSize(width: 1200, height: 800))
         hosting.layoutSubtreeIfNeeded()

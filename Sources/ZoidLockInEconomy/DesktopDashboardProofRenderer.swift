@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import ZoidLockInCore
+import ZoidLockInFilterExtension
 
 public enum DesktopDashboardProofError: Error, Equatable, Sendable {
     case renderFailed
@@ -41,7 +42,10 @@ public enum DesktopDashboardProofRenderer: Sendable {
         let app = NSApplication.shared
         app.setActivationPolicy(.accessory)
 
-        let view = CommandDashboardView(snapshot: snapshot)
+        let view = CommandDashboardView(
+            snapshot: snapshot,
+            contentFilterManager: ContentFilterManager.mockForTesting
+        )
         let hosting = NSHostingView(rootView: view)
         hosting.appearance = NSAppearance(named: .aqua)
         hosting.frame = NSRect(origin: .zero, size: size)

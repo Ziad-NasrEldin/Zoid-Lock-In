@@ -2,6 +2,7 @@ import ServiceManagement
 import SwiftUI
 import ZoidLockInCore
 import ZoidLockInEnforcer
+import ZoidLockInFilterExtension
 
 /// Standalone SUMI-E Ink command dashboard: vault, ledger, 2FA settings.
 public struct CommandDashboardView: View {
@@ -19,6 +20,7 @@ public struct CommandDashboardView: View {
     public var onResetLock: (() -> Void)?
     public var onToggleFocus: (() -> Void)?
     public var onToggleCooldownBypass: (() -> Void)?
+    public var onActivateContentFilter: (() -> Void)?
 
     @State private var tab: CommandDashboardTab
     @State private var filter: LedgerAuditKind
@@ -39,6 +41,7 @@ public struct CommandDashboardView: View {
     @State private var newEmailText: String = ""
     @State private var sentinelStatus: SMAppService.Status
     @State private var sentinelError: String = ""
+    private var contentFilterManager: ContentFilterManager?
 
     public init(
         snapshot: CommandDashboardSnapshot,
@@ -54,7 +57,9 @@ public struct CommandDashboardView: View {
         onDeleteHabit: ((UUID) -> Void)? = nil,
         onResetLock: (() -> Void)? = nil,
         onToggleFocus: (() -> Void)? = nil,
-        onToggleCooldownBypass: (() -> Void)? = nil
+        onToggleCooldownBypass: (() -> Void)? = nil,
+        contentFilterManager: ContentFilterManager? = nil,
+        onActivateContentFilter: (() -> Void)? = nil
     ) {
         self.snapshot = snapshot
         self.onUnlock = onUnlock
@@ -70,6 +75,8 @@ public struct CommandDashboardView: View {
         self.onResetLock = onResetLock
         self.onToggleFocus = onToggleFocus
         self.onToggleCooldownBypass = onToggleCooldownBypass
+        self.contentFilterManager = contentFilterManager
+        self.onActivateContentFilter = onActivateContentFilter
         _tab = State(initialValue: snapshot.selectedTab)
         _filter = State(initialValue: snapshot.ledgerPage.filter)
         _search = State(initialValue: snapshot.ledgerPage.search)
@@ -602,6 +609,7 @@ public struct CommandDashboardView: View {
                 governanceCard
                 emergencyCard
                 sentinelCard
+                contentFilterCard
             }
             .frame(width: 360)
         }
@@ -1331,6 +1339,13 @@ public struct CommandDashboardView: View {
         }
     }
 
+    private var contentFilterCard: some View {
+        ContentFilterSettingsCard(
+            manager: contentFilterManager,
+            onActivate: onActivateContentFilter
+        )
+    }
+
     private func labeledValue(_ label: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(label.uppercased())
@@ -1372,5 +1387,69 @@ private struct SumiInkGhostButton: ButtonStyle {
             .padding(.vertical, 6)
             .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
             .opacity(configuration.isPressed ? 0.7 : 1)
+    }
+}
+ 
+ /// Dedicated settings card that observes `ContentFilterManager` so SwiftUI reactively
+ /// updates when the filter status changes asynchronously.
+ public struct ContentFilterSettingsCard: View {
+     @ObservedObject private var manager: ContentFilterManager
+     public var onActivate: (() -> Void)?
+ 
+    public init(manager: ContentFilterManager? = nil, onActivate: (() -> Void)? = nil) {
+        self._manager = ObservedObject(wrappedValue: manager ?? ContentFilterManager.mockForTesting)
+        self.onActivate = onActivate
+    }
+ 
+     private var status: ContentFilterStatus {
+         manager.status
+     }
+ 
+     private var errorMessage: String {
+         manager.errorMessage
+     }
+ 
+     public var body: some View {
+         VStack(alignment: .leading, spacing: 10) {
+             HStack {
+                 Text("NETWORK EXTENSION FILTER")
+                     .font(SumiInk.caption(10))
+                     .tracking(1.8)
+                     .foregroundStyle(SumiInk.inkMuted)
+                 Spacer()
+                 Text(status.caption)
+                     .font(SumiInk.caption(9))
+                     .tracking(1.2)
+                     .foregroundStyle(status == .enabled ? SumiInk.ink : (status == .pendingApproval ? SumiInk.inkMuted : SumiInk.seal))
+                     .padding(.horizontal, 6)
+                     .padding(.vertical, 2)
+                     .background(status == .enabled ? SumiInk.paperSoft : (status == .pendingApproval ? SumiInk.paperSoft.opacity(0.8) : SumiInk.sealWash))
+             }
+             Text("Root socket filter provider restricting unverified UDP/QUIC and blacklisted web domains.")
+                 .font(SumiInk.body(12))
+                 .foregroundStyle(SumiInk.inkMuted)
+             if status != .enabled {
+                 Button(status == .pendingApproval ? "PROMPT FILTER AUTHORIZATION" : "ACTIVATE CONTENT FILTER") {
+                     manager.requestActivation()
+                     onActivate?()
+                 }
+                 .buttonStyle(SumiInkGhostButton())
+                 if !errorMessage.isEmpty {
+                     Text(errorMessage)
+                         .font(SumiInk.caption(10))
+                         .foregroundStyle(SumiInk.seal)
+                 }
+             } else {
+                 Text("Network socket filter actively filtering inspected traffic.")
+                     .font(SumiInk.caption(10))
+                     .foregroundStyle(SumiInk.inkMuted)
+             }
+         }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .overlay(Rectangle().stroke(SumiInk.rule, lineWidth: 1))
+        .onAppear {
+            manager.refreshStatus()
+        }
     }
 }

@@ -2,6 +2,45 @@ import Foundation
 import NetworkExtension
 import ZoidLockInCore
 
+/// Activation state of the Network Extension Content Filter.
+public enum ContentFilterStatus: String, Sendable, Equatable, Hashable {
+    case disabled = "DISABLED"
+    case pendingApproval = "PENDING APPROVAL"
+    case enabled = "ENABLED"
+    case failed = "FAILED"
+
+    public var caption: String {
+        switch self {
+        case .enabled:
+            return "ENABLED · CONTENT FILTER"
+        case .pendingApproval:
+            return "PENDING USER APPROVAL IN SYSTEM SETTINGS"
+        case .disabled:
+            return "DISABLED · NOT CONFIGURED"
+        case .failed:
+            return "ACTIVATION FAILED"
+        }
+    }
+}
+
+/// Abstraction over `NEFilterManager` for testing and decoupling.
+public protocol FilterManaging: AnyObject, Sendable {
+    var isEnabled: Bool { get set }
+    var localizedDescription: String? { get set }
+    var providerConfiguration: NEFilterProviderConfiguration? { get set }
+    func loadFromPreferences(completionHandler: @escaping @Sendable ((any Error)?) -> Void)
+    func saveToPreferences(completionHandler: @escaping @Sendable ((any Error)?) -> Void)
+    func applyDisableEncryptedDNSSettings()
+}
+
+extension NEFilterManager: @retroactive @unchecked Sendable, FilterManaging {
+    public func applyDisableEncryptedDNSSettings() {
+        if #available(macOS 15.0, *) {
+            self.disableEncryptedDNSSettings = true
+        }
+    }
+}
+
 /// Host-side activator that configures `NEFilterManager` for the filter sysex.
 ///
 /// Called from the unprivileged app after the user approves the system
@@ -35,5 +74,9 @@ public struct ContentFilterActivation: Sendable {
         if #available(macOS 15.0, *) {
             manager.disableEncryptedDNSSettings = true
         }
+    }
+
+    public func applyDisableEncryptedDNSSettings(to manager: any FilterManaging) {
+        manager.applyDisableEncryptedDNSSettings()
     }
 }
