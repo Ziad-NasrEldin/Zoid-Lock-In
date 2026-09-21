@@ -19,6 +19,8 @@ public protocol EconomicLedger: Sendable {
 
     func loadVault() throws -> LifetimeVaultRecord
     func saveVault(_ vault: LifetimeVaultRecord) throws
+    func loadPinnedCivilTimeZoneIdentifier() throws -> String?
+    func pinCivilTimeZoneIdentifier(_ identifier: String) throws
 }
 
 public extension EconomicLedger {
@@ -46,6 +48,7 @@ public final class InMemoryEconomicLedger: EconomicLedger, @unchecked Sendable {
     private var sessions: [UUID: FocusSessionRecord] = [:]
     private var reconciliations: [String: DailyReconciliationRecord] = [:]
     private var vault = LifetimeVaultRecord.empty
+    private var pinnedCivilTimeZoneIdentifier: String?
 
     public init() {}
 
@@ -119,6 +122,18 @@ public final class InMemoryEconomicLedger: EconomicLedger, @unchecked Sendable {
 
     public func saveVault(_ vault: LifetimeVaultRecord) throws {
         withLock { self.vault = vault }
+    }
+
+    public func loadPinnedCivilTimeZoneIdentifier() throws -> String? {
+        withLock { pinnedCivilTimeZoneIdentifier }
+    }
+
+    public func pinCivilTimeZoneIdentifier(_ identifier: String) throws {
+        withLock {
+            if pinnedCivilTimeZoneIdentifier == nil {
+                pinnedCivilTimeZoneIdentifier = identifier
+            }
+        }
     }
 
     /// Test seam: any attempt to rewrite a posted wallet row is an invariant break.

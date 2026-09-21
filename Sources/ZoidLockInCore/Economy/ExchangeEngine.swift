@@ -77,10 +77,23 @@ public final class ExchangeEngine: @unchecked Sendable {
         self.wallClock = wallClock
         self.activityDetector = activityDetector
         self.timeTravel = timeTravel
-        self.civilClock = LocalCivilClock(timeZone: timeZone)
+        let resolvedTimeZone = Self.resolvedCivilTimeZone(from: ledger, fallback: timeZone)
+        self.civilClock = LocalCivilClock(timeZone: resolvedTimeZone)
         self.catalogStorage = catalog
         self.habitWindow = habitWindow
         restoreLiveSession()
+    }
+
+    private static func resolvedCivilTimeZone(
+        from ledger: any EconomicLedger,
+        fallback: TimeZone
+    ) -> TimeZone {
+        if let identifier = try? ledger.loadPinnedCivilTimeZoneIdentifier(),
+           let pinned = TimeZone(identifier: identifier) {
+            return pinned
+        }
+        try? ledger.pinCivilTimeZoneIdentifier(fallback.identifier)
+        return fallback
     }
 
     public var catalog: AmenityCatalog {
