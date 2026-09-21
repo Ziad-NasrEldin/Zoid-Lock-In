@@ -4,6 +4,7 @@ import Security
 
 public enum PasswordHashingError: Error, Equatable, Sendable {
     case tooShort(minimum: Int)
+    case tooWeak(missing: [String])
     case malformedStoredHash
     case randomGenerationFailed
 }
@@ -50,6 +51,10 @@ public enum PasswordHasher: Sendable {
         iterations: Int = defaultIterations
     ) throws -> String {
         try validateLength(password)
+        let complexity = validateComplexity(password)
+        if !complexity.isValid {
+            throw PasswordHashingError.tooWeak(missing: complexity.missing)
+        }
         let salt = try randomBytes(saltLength)
         let key = derive(
             password: Data(password.utf8),

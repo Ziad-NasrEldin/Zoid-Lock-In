@@ -173,7 +173,7 @@ struct Slice9AdversarialHardeningTests {
         let wall = ManualWallClock(Date(timeIntervalSince1970: 1_700_000_000))
         let gate = SecurityGatekeeper(keychain: keychain, wallClock: wall)
         let secret = try TOTPEngine.generateSecret()
-        _ = try gate.enroll(password: "twelve chars+", totpSecret: secret)
+        _ = try gate.enroll(password: "Aa1!bbbbbbbb", totpSecret: secret)
         #expect(gate.isEnrolled)
         #expect(!gate.isUnlocked)
 
@@ -193,7 +193,7 @@ struct Slice9AdversarialHardeningTests {
         #expect(try harness.store.allHabits().isEmpty)
 
         let code = try TOTPEngine.code(base32Secret: secret, at: wall.now())
-        _ = try await gate.unlock(password: "twelve chars+", totp: code)
+        _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
         #expect(gate.isUnlocked)
 
         let habit = try harness.habits.createHabit(title: "Make Bed")
@@ -208,22 +208,71 @@ struct Slice9AdversarialHardeningTests {
         let wall = ManualWallClock(Date(timeIntervalSince1970: 1_700_000_010))
         let gate = SecurityGatekeeper(keychain: keychain, wallClock: wall)
         let secret = try TOTPEngine.generateSecret()
-        _ = try gate.enroll(password: "twelve chars+", totpSecret: secret)
+        _ = try gate.enroll(password: "Aa1!bbbbbbbb", totpSecret: secret)
         let code = try TOTPEngine.code(base32Secret: secret, at: wall.now())
 
-        _ = try await gate.unlock(password: "twelve chars+", totp: code)
+        _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
         #expect(gate.isUnlocked)
         #expect(gate.lastUsedTOTPWindow != nil)
         gate.lockSettings()
         #expect(!gate.isUnlocked)
 
         do {
-            _ = try await gate.unlock(password: "twelve chars+", totp: code)
+            _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
             Issue.record("replaying the same TOTP window must fail")
         } catch let error as SecurityGatekeeperError {
             #expect(error == .totpMismatch)
         }
         #expect(!gate.isUnlocked)
+    }
+
+    @Test("unlocked sessions expire after 10 minutes and fail closed on clock rollback")
+    func unlockedSessionExpiresAndRejectsClockRollback() async throws {
+        let keychain = InMemoryKeychainStore()
+        let wall = ManualWallClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let mono = ManualMonotonicClock(startingAt: 1_000)
+        let gate = SecurityGatekeeper(keychain: keychain, wallClock: wall, clock: mono)
+        let secret = try TOTPEngine.generateSecret()
+        _ = try gate.enroll(password: "Aa1!bbbbbbbb", totpSecret: secret)
+        let code = try TOTPEngine.code(base32Secret: secret, at: wall.now())
+        _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
+        #expect(gate.isUnlocked)
+        #expect(gate.snapshot().isUnlocked)
+
+        wall.advance(by: SecurityGatekeeper.sessionTimeoutSeconds - 1)
+        #expect(gate.isUnlocked)
+        #expect(gate.snapshot().isUnlocked)
+
+        wall.advance(by: 1)
+        #expect(!gate.isUnlocked)
+        #expect(!gate.snapshot().isUnlocked)
+        #expect(throws: SecurityGatekeeperError.notUnlocked) {
+            try gate.requireUnlocked()
+        }
+
+        wall.advance(by: 30)
+        let laterCode = try TOTPEngine.code(base32Secret: secret, at: wall.now())
+        _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: laterCode)
+        #expect(gate.isUnlocked)
+        #expect(gate.snapshot().isUnlocked)
+
+        wall.advance(by: -5)
+        #expect(!gate.isUnlocked)
+        #expect(!gate.snapshot().isUnlocked)
+
+        wall.advance(by: 35)
+        let monotonicCode = try TOTPEngine.code(base32Secret: secret, at: wall.now())
+        _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: monotonicCode)
+        #expect(gate.isUnlocked)
+        #expect(gate.snapshot().isUnlocked)
+
+        mono.advance(by: SecurityGatekeeper.sessionTimeoutSeconds - 1)
+        #expect(gate.isUnlocked)
+        #expect(gate.snapshot().isUnlocked)
+
+        mono.advance(by: 1)
+        #expect(!gate.isUnlocked)
+        #expect(!gate.snapshot().isUnlocked)
     }
 
     @Test("alert mail failure is audited without corrupting the unlocked session")
@@ -233,10 +282,10 @@ struct Slice9AdversarialHardeningTests {
         let mail = FailingAdminMail()
         let gate = SecurityGatekeeper(keychain: keychain, mail: mail, wallClock: wall)
         let secret = try TOTPEngine.generateSecret()
-        _ = try gate.enroll(password: "twelve chars+", totpSecret: secret)
+        _ = try gate.enroll(password: "Aa1!bbbbbbbb", totpSecret: secret)
         let code = try TOTPEngine.code(base32Secret: secret, at: wall.now())
 
-        let session = try await gate.unlock(password: "twelve chars+", totp: code)
+        let session = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
         #expect(session.recipient == SecurityGatekeeper.defaultRecipient)
         #expect(gate.isUnlocked)
 
@@ -247,6 +296,46 @@ struct Slice9AdversarialHardeningTests {
         #expect(audit.count == 1)
         #expect(audit[0].emailDispatched == false)
         #expect(audit[0].kind == .settingsUnlocked)
+    }
+
+    @Test("failed admin mail writes a durable audit row that survives ledger reopen")
+    func failedAdminMailPersistsAcrossLedgerReopen() async throws {
+        let url = EconomicLedgerLocation.makeIsolatedFileURL()
+        let ledger = try SQLiteEconomicLedger(fileURL: url)
+        let keychain = InMemoryKeychainStore()
+        let wall = ManualWallClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let mail = FailingAdminMail()
+        let gate = SecurityGatekeeper(
+            keychain: keychain,
+            mail: mail,
+            wallClock: wall,
+            auditStore: ledger
+        )
+        let secret = try TOTPEngine.generateSecret()
+        _ = try gate.enroll(password: "Aa1!bbbbbbbb", totpSecret: secret)
+        let code = try TOTPEngine.code(base32Secret: secret, at: wall.now())
+        _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
+        #expect(gate.isUnlocked)
+        #expect(gate.auditLog().count == 1)
+        #expect(gate.auditLog()[0].emailDispatched == false)
+
+        let reopened = try SQLiteEconomicLedger(fileURL: url)
+        let persisted = try reopened.allAdminAuditEvents()
+        #expect(persisted.count == 1)
+        #expect(persisted[0].kind == .settingsUnlocked)
+        #expect(persisted[0].emailDispatched == false)
+        #expect(persisted[0].recipient == SecurityGatekeeper.defaultRecipient)
+        #expect(persisted[0].errorDescription != nil)
+
+        let reloaded = SecurityGatekeeper(
+            keychain: keychain,
+            mail: mail,
+            wallClock: wall,
+            auditStore: reopened
+        )
+        #expect(reloaded.auditLog().count == 1)
+        #expect(reloaded.auditLog()[0].emailDispatched == false)
+        #expect(reloaded.snapshot().lastAuditEmailDispatched == false)
     }
 
     @MainActor

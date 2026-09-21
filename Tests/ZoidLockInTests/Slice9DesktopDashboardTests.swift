@@ -157,7 +157,7 @@ struct Slice9DesktopDashboardTests {
         )
     }
 
-    @Test("password hasher rejects short secrets and verifies a 12+ character hash")
+    @Test("password hasher rejects short or weak secrets and verifies a complex hash")
     func passwordValidation() throws {
         do {
             _ = try PasswordHasher.hash("short")
@@ -166,12 +166,20 @@ struct Slice9DesktopDashboardTests {
             #expect(error == .tooShort(minimum: 12))
         }
 
-        let password = "correct-horse"
-        #expect(password.count == 13)
+        do {
+            _ = try PasswordHasher.hash("twelve chars+")
+            Issue.record("passwords missing required character classes must be rejected")
+        } catch let error as PasswordHashingError {
+            #expect(error == .tooWeak(missing: PasswordHasher.validateComplexity("twelve chars+").missing))
+        }
+
+        let password = "Aa1!bbbbbbbb"
+        #expect(password.count == 12)
+        #expect(PasswordHasher.validateComplexity(password).isValid)
         let stored = try PasswordHasher.hash(password, iterations: 2_000)
         #expect(stored.hasPrefix("pbkdf2-sha256$"))
         #expect(PasswordHasher.verify(password, against: stored))
-        #expect(!PasswordHasher.verify("correct-horse!", against: stored))
+        #expect(!PasswordHasher.verify("Aa1!bbbbbbbb!", against: stored))
         #expect(!PasswordHasher.verify("short", against: stored))
     }
 
@@ -237,15 +245,22 @@ struct Slice9DesktopDashboardTests {
             #expect(error == .passwordTooShort(minimum: 12))
         }
 
+        do {
+            _ = try gate.enroll(password: "twelve chars+", totpSecret: secret)
+            Issue.record("enrollment must reject passwords missing required character classes")
+        } catch let error as SecurityGatekeeperError {
+            #expect(error == .passwordTooWeak(missing: PasswordHasher.validateComplexity("twelve chars+").missing))
+        }
+
         let enrollment = try gate.enroll(
-            password: "twelve chars+",
+            password: "Aa1!bbbbbbbb",
             totpSecret: secret,
             recipient: "founder@mavoid.com"
         )
         #expect(enrollment.otpAuthURL.contains("otpauth://totp/"))
         #expect(gate.isEnrolled)
         #expect(!gate.isUnlocked)
-        #expect(gate.verifyPassword("twelve chars+"))
+        #expect(gate.verifyPassword("Aa1!bbbbbbbb"))
         #expect(!gate.verifyPassword("twelve char"))
 
         let now = wall.now()
@@ -257,13 +272,13 @@ struct Slice9DesktopDashboardTests {
             #expect(error as? SecurityGatekeeperError == .passwordMismatch)
         }
         do {
-            _ = try await gate.unlock(password: "twelve chars+", totp: "000000")
+            _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: "000000")
             Issue.record("wrong TOTP must fail")
         } catch {
             #expect(error as? SecurityGatekeeperError == .totpMismatch)
         }
 
-        let session = try await gate.unlock(password: "twelve chars+", totp: code)
+        let session = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
         #expect(session.recipient == "founder@mavoid.com")
         #expect(gate.isUnlocked)
         #expect(mail.events.count == 1)
@@ -284,7 +299,8 @@ struct Slice9DesktopDashboardTests {
         #expect(transport.requests.count == 1)
         let body = try #require(transport.requests[0].httpBody)
         let payload = try JSONDecoder().decode(ResendEmailPayload.self, from: body)
-        #expect(payload.subject.contains("Admin settings unlocked"))
+        #expect(payload.subject == "CRITICAL: You entered Admin Dashboard. Stand firm.")
+        #expect(payload.text.contains("CRITICAL SECURITY & INTEGRITY ALERT: You have authenticated into the Zoid 0 Trading Center Admin Settings."))
         #expect(payload.text.contains("ADMIN_LOGIN"))
     }
 
@@ -389,8 +405,8 @@ struct Slice9DesktopDashboardTests {
 
         let secret = try TOTPEngine.generateSecret()
         try gate.enroll(
-            password: "twelve chars+",
-            passwordConfirmation: "twelve chars+",
+            password: "Aa1!bbbbbbbb",
+            passwordConfirmation: "Aa1!bbbbbbbb",
             totpSecret: secret
         )
 
@@ -401,7 +417,7 @@ struct Slice9DesktopDashboardTests {
 
         // Unlock
         let code = try TOTPEngine.code(base32Secret: secret, at: wall.now())
-        _ = try await gate.unlock(password: "twelve chars+", totp: code)
+        _ = try await gate.unlock(password: "Aa1!bbbbbbbb", totp: code)
         #expect(gate.isUnlocked)
 
         // Invalid emails
