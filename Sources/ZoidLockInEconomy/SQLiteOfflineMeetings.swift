@@ -200,7 +200,7 @@ extension SQLiteEconomicLedger: OfflineMeetingStoring {
             id: id,
             punchInUTC: punchIn,
             punchOutUTC: textDate(row["punch_out_time"]),
-            punchInMonotonic: double(row["punch_in_monotonic"]),
+            punchInMonotonic: rawDouble(row["punch_in_monotonic"]),
             punchOutMonotonic: optionalDouble(row["punch_out_monotonic"]),
             punchInUptime: optionalDouble(row["punch_in_uptime"]),
             punchOutUptime: optionalDouble(row["punch_out_uptime"]),

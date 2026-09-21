@@ -373,6 +373,108 @@ struct Slice3AdversarialHardeningTests {
         #expect(snapshot.walletBalance == 0.5)
         #expect(coordinator.queueLabel == "zoidlockin.economy")
     }
+
+    @Test("unknown boot UUIDs are not a stable identity")
+    func unknownBootIsNotStableIdentity() {
+        #expect(!BootSession.isStableIdentity(nil))
+        #expect(!BootSession.isStableIdentity(""))
+        #expect(!BootSession.isStableIdentity("unknown"))
+        #expect(!BootSession.isStableIdentity("UNKNOWN"))
+        #expect(!BootSession.isStableIdentity(" unknown "))
+        #expect(BootSession.isStableIdentity("boot-a"))
+        #expect(!BootSession.isSameBoot("unknown", "unknown"))
+        #expect(!BootSession.isSameBoot("boot-a", "unknown"))
+        #expect(!BootSession.isSameBoot("boot-a", "boot-b"))
+        #expect(BootSession.isSameBoot("boot-a", "boot-a"))
+    }
+
+    @Test("unknown boot UUID does not restore a redemption journal entry")
+    func unknownBootDoesNotRestoreRedemption() {
+        let issuedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let unknown = RedemptionJournalEntry(
+            nonce: "n-unknown",
+            transactionID: UUID(),
+            kind: .food,
+            monotonicStart: 10,
+            durationSeconds: 600,
+            bootUUID: BootSession.unknownUUID,
+            issuedAt: issuedAt
+        )
+        #expect(!unknown.isRestorable(bootUUID: BootSession.unknownUUID, at: 20))
+
+        let stable = RedemptionJournalEntry(
+            nonce: "n-stable",
+            transactionID: UUID(),
+            kind: .food,
+            monotonicStart: 10,
+            durationSeconds: 600,
+            bootUUID: "boot-a",
+            issuedAt: issuedAt
+        )
+        #expect(stable.isRestorable(bootUUID: "boot-a", at: 20))
+        #expect(!stable.isRestorable(bootUUID: BootSession.unknownUUID, at: 20))
+    }
+
+    @Test("unknown boot UUID does not restore emergency monotonic cooldown")
+    func unknownBootDoesNotRestoreEmergencyMonotonicCooldown() {
+        var controller = DaemonPassController()
+        let started: TimeInterval = 10
+        let utc = Date(timeIntervalSince1970: 1_700_000_000)
+        controller.restoreCooldown(
+            startedAt: started,
+            utc: utc,
+            bootSessionUUID: BootSession.unknownUUID
+        )
+        let remaining = controller.emergencyCooldownRemaining(
+            at: started + 60,
+            utcNow: utc.addingTimeInterval(DaemonPassController.emergencyCooldownSeconds + 1),
+            bootSessionUUID: BootSession.unknownUUID
+        )
+        #expect(remaining == 0)
+
+        controller.restoreCooldown(
+            startedAt: started,
+            utc: utc,
+            bootSessionUUID: "boot-a"
+        )
+        let monotonicRemaining = controller.emergencyCooldownRemaining(
+            at: started + 60,
+            utcNow: utc.addingTimeInterval(DaemonPassController.emergencyCooldownSeconds + 1),
+            bootSessionUUID: "boot-a"
+        )
+        #expect(monotonicRemaining > 23 * 60 * 60)
+    }
+
+    @Test("unknown boot UUID does not restore a stale calibration monotonic origin")
+    func unknownBootDoesNotRestoreCalibrationOrigin() {
+        let start = Date(timeIntervalSince1970: 1_700_000_000)
+        let store = InMemoryCalibrationStore()
+        let keyProvider = InMemoryCalibrationKeyProvider()
+        let wall = ManualWallClock(start)
+        let first = CalibrationCoordinator(
+            store: store,
+            clock: ManualMonotonicClock(startingAt: 10),
+            wallClock: wall,
+            timeTravel: TimeTravelGuard(),
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            bootSessionUUID: BootSession.unknownUUID,
+            keyProvider: keyProvider
+        )
+        #expect(first.snapshot().phase == .day1)
+        #expect(!first.snapshot().isClockTampered)
+
+        wall.advance(by: 3_600)
+        let resumed = CalibrationCoordinator(
+            store: store,
+            clock: ManualMonotonicClock(startingAt: 11),
+            wallClock: wall,
+            timeTravel: TimeTravelGuard(),
+            timeZone: TimeZone(secondsFromGMT: 0)!,
+            bootSessionUUID: BootSession.unknownUUID,
+            keyProvider: keyProvider
+        )
+        #expect(!resumed.snapshot().isClockTampered)
+    }
 }
 
 private final class HardeningProcessRuntime: ProcessRuntimeControlling, @unchecked Sendable {

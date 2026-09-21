@@ -338,7 +338,9 @@ public final class MobileShieldCoordinator: MobileShieldPublishing, @unchecked S
             let duration = status?.activePasses.first { $0.kind == added }?.remainingSeconds ?? 0
             return .passRedeemed(kind: added, durationSeconds: duration)
         }
-        if let expired = previousKinds.subtracting(nextKinds).sorted(by: <).first {
+        if let expired = previousKinds.subtracting(nextKinds).sorted(by: <).first,
+           let record = previous.activePasses.first(where: { $0.kind == expired }),
+           !record.isLive(at: now) {
             return .passExpired(kind: expired)
         }
         if let wallClockExpired = previous.activePasses.first(where: {

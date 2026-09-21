@@ -131,13 +131,13 @@ extension SQLiteEconomicLedger: CalibrationStoring {
 
         return CalibrationState(
             calibrationStartedAt: startedAt,
-            calibrationStartedMonotonic: double(row["calibration_started_monotonic"]),
+            calibrationStartedMonotonic: rawDouble(row["calibration_started_monotonic"]),
             bootSessionUUID: boot,
             isCompleted: int(row["is_completed"]) != 0,
             transitionToHardAt: transition,
             lastObservedWall: lastWall,
             lastObservedMonotonic: lastMono,
-            accruedMonotonicElapsed: double(row["accrued_monotonic_elapsed"]),
+            accruedMonotonicElapsed: rawDouble(row["accrued_monotonic_elapsed"]),
             isTampered: int(row["is_tampered"]) != 0,
             sequence: UInt64(max(0, int(row["seal_sequence"])))
         )

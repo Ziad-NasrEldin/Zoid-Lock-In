@@ -17,6 +17,7 @@ public struct MenuBarExtraView: View {
     public var onAppeal: ((String) -> Void)?
     public var onCompleteHabit: ((UUID) -> Void)?
     public var onCreateHabit: ((String, Double, Int) -> Void)?
+    public var onDeleteHabit: ((UUID) -> Void)?
     public var onOpenDashboard: (() -> Void)?
 
     @State private var surface: MenuBarCompanionSurface
@@ -36,6 +37,7 @@ public struct MenuBarExtraView: View {
         onAppeal: ((String) -> Void)? = nil,
         onCompleteHabit: ((UUID) -> Void)? = nil,
         onCreateHabit: ((String, Double, Int) -> Void)? = nil,
+        onDeleteHabit: ((UUID) -> Void)? = nil,
         onOpenDashboard: (() -> Void)? = nil,
         initialSurface: MenuBarCompanionSurface = .focus
     ) {
@@ -53,6 +55,7 @@ public struct MenuBarExtraView: View {
         self.onAppeal = onAppeal
         self.onCompleteHabit = onCompleteHabit
         self.onCreateHabit = onCreateHabit
+        self.onDeleteHabit = onDeleteHabit
         self.onOpenDashboard = onOpenDashboard
         _surface = State(initialValue: initialSurface)
     }
@@ -80,7 +83,8 @@ public struct MenuBarExtraView: View {
                     MicroHabitsPopoverView(
                         snapshot: habits,
                         onComplete: onCompleteHabit,
-                        onCreate: onCreateHabit
+                        onCreate: onCreateHabit,
+                        onDelete: onDeleteHabit
                     )
                 }
             }

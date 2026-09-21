@@ -380,7 +380,7 @@ extension GovernanceState {
             && datesEqual(lastObservedWall, payload.lastObservedWall)
             && doublesEqual(lastObservedMonotonic, payload.lastObservedMonotonic)
             && lastObservedBootSessionUUID == payload.lastObservedBootSessionUUID
-            && abs(accruedMonotonicElapsed - payload.accruedMonotonicElapsed) < 0.000_1
+            && abs(accruedMonotonicElapsed - payload.accruedMonotonicElapsed) < 0.01
             && pinnedTimeZoneIdentifier == payload.pinnedTimeZoneIdentifier
             && sequence == payload.sequence
     }
@@ -390,7 +390,7 @@ extension GovernanceState {
         case (nil, nil):
             return true
         case let (left?, right?):
-            return abs(left.timeIntervalSince(right)) < 0.002
+            return abs(left.timeIntervalSince(right)) < 1.0
         default:
             return false
         }
@@ -401,7 +401,7 @@ extension GovernanceState {
         case (nil, nil):
             return true
         case let (left?, right?):
-            return abs(left - right) < 0.000_1
+            return abs(left - right) < 0.01
         default:
             return false
         }

@@ -121,7 +121,7 @@ extension MicroHabitError: LocalizedError {
         case .invalidReward:
             return "Habit reward must be between \(CreditMath.displayString(HabitCreditMinting.minReward)) and \(CreditMath.displayString(HabitCreditMinting.maxReward))."
         case .invalidFrequency:
-            return "Daily frequency must be \(HabitCreditMinting.minDailyFrequency) or \(HabitCreditMinting.maxDailyFrequency)."
+            return "Daily frequency must be between \(HabitCreditMinting.minDailyFrequency) and \(HabitCreditMinting.maxDailyFrequency)."
         case .duplicateCompletion:
             return "That habit completion has already been recorded."
         case .clockTampered(let skew):
@@ -137,7 +137,7 @@ public enum HabitCreditMinting: Sendable {
     public static let minReward: Double = 0.25
     public static let maxReward: Double = 1.5
     public static let minDailyFrequency: Int = 1
-    public static let maxDailyFrequency: Int = 2
+    public static let maxDailyFrequency: Int = 5
     public static let maxTitleLength: Int = 80
     public static let rollingWindowSeconds: TimeInterval = 86_400
 

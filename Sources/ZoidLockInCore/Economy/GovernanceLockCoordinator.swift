@@ -9,7 +9,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
     public let wallClock: any WallClockProviding
     public let timeTravel: TimeTravelGuard
     public let bootSessionUUID: String
-    public let isCooldownBypassEnabled: Bool
+    public private(set) var isCooldownBypassEnabled: Bool
     public let replicaSealStore: (any GovernanceSealPersisting)?
     public let gatekeeper: SecurityGatekeeper?
 
@@ -209,6 +209,29 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         }
     }
 
+    public func setCooldownBypassEnabled(_ enabled: Bool) {
+        withLock {
+            isCooldownBypassEnabled = enabled
+            publishLiveSettingsLocked()
+        }
+    }
+
+    public func resetLockForAdmin() throws {
+        try withLock {
+            timeTravel.clearTamper()
+            var state = (try? verifiedStateLocked()) ?? .empty
+            state.lastConfigurationMutationAt = nil
+            state.lastConfigurationMutationMonotonic = nil
+            state.mutationBootSessionUUID = nil
+            state.accruedMonotonicElapsed = 0
+            state.lastObservedWall = wallClock.now()
+            state.lastObservedMonotonic = clock.nowSeconds()
+            state.lastObservedBootSessionUUID = bootSessionUUID
+            try persistStateLocked(state)
+            publishLiveSettingsLocked()
+        }
+    }
+
     public func amenityPriceOverrides() throws -> [AmenityKind: Double] {
         try store.loadAmenityPriceOverrides()
     }
@@ -250,7 +273,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         guard let state = try? store.loadGovernanceState(),
               let wall = state.lastObservedWall,
               let mono = state.lastObservedMonotonic,
-              state.lastObservedBootSessionUUID == bootSessionUUID
+              BootSession.isSameBoot(state.lastObservedBootSessionUUID, bootSessionUUID)
         else {
             return
         }
@@ -284,7 +307,7 @@ public final class GovernanceLockCoordinator: @unchecked Sendable {
         var state = try verifiedStateLocked()
         var delta: TimeInterval = 0
         if let lastMono = state.lastObservedMonotonic,
-           state.lastObservedBootSessionUUID == bootSessionUUID {
+           BootSession.isSameBoot(state.lastObservedBootSessionUUID, bootSessionUUID) {
             let elapsed = nowMono - lastMono
             if elapsed > 0 {
                 delta = elapsed
