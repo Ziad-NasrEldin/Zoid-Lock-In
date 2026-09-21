@@ -233,6 +233,7 @@ private struct CommandDashboardContainer: View {
             onCreateHabit: { title, reward, freq in
                 session.createHabit(title, reward: reward, frequency: freq)
             },
+            onToggleFocus: session.toggleFocus,
             contentFilterManager: session.contentFilterManager
         )
         .onAppear {

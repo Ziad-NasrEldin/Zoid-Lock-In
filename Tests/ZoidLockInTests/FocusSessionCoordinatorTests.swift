@@ -67,4 +67,13 @@ struct FocusSessionCoordinatorTests {
         // Focus state should reflect engine state
         #expect(snapshot.focusState != nil)
     }
+
+
+    @Test("Codex desktop app is a productive focus source")
+    func codexIsProductive() {
+        #expect(ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.openai.codex"))
+        #expect(ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.openai.chat"))
+        #expect(ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.todesktop.230313mzl4w4u92"))
+        #expect(!ZoidZeroLiveTracker.isProductive(bundleIdentifier: "com.apple.Music"))
+    }
 }

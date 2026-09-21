@@ -57,7 +57,8 @@ public final class ZoidZeroLiveTracker: @unchecked Sendable {
         "com.fournova.Tower",
         "com.tinyspeck.slackmacgap",
         "com.microsoft.teams2",
-        "com.openai.chat"
+        "com.openai.chat",
+        "com.openai.codex"
     ]
 
     private let lock = NSLock()
